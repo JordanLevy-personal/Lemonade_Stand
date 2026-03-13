@@ -68,6 +68,17 @@ export interface DailyReport {
   startingReputation: number
 }
 
+export type CustomerVisitOutcome = 'buy' | 'skip' | 'soldOut'
+
+export type CustomerVisitIndicator = 'check' | 'x'
+
+export interface CustomerVisit {
+  customerIndex: number
+  arrivalProgress: number
+  outcome: CustomerVisitOutcome
+  indicator: CustomerVisitIndicator
+}
+
 export interface ActiveCard {
   id: CardId
   draftedOnDay: number
@@ -80,6 +91,7 @@ export interface RngState {
 
 export interface PendingReport extends DailyReport {
   flatReputationAdjustment: number
+  customerVisits: CustomerVisit[]
 }
 
 export interface GameState {

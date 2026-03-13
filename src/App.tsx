@@ -16,14 +16,33 @@ import {
   setStrategy,
   skipDraft,
 } from './game/engine'
-import type { CardId, DailyReport, GameState, Inventory, Recipe } from './game/types'
+import type { CardId, CustomerVisit, DailyReport, GameState, Inventory, Recipe } from './game/types'
 
 export const SAVE_KEY = 'roguelike-lemonade-stand-save-v1'
+const IS_DEV = import.meta.env.DEV
+
+const DAY_PLAYBACK_MS = 9_000
+const DAY_TRANSITION_DELAY_MS = 400
+const DAY_TICK_MS = 100
+const BUSINESS_DAY_START_MINUTES = 8 * 60
+const BUSINESS_DAY_END_MINUTES = 18 * 60
+const CUSTOMER_TRAVEL_WINDOW = 0.22
+const CUSTOMER_DECISION_OFFSET = 0.08
+const CUSTOMER_INDICATOR_WINDOW = 0.08
+const DEFAULT_SIMULATION_SPEED = 1
+const SIMULATION_SPEED_OPTIONS = [0.5, 0.75, 1, 1.5, 2]
 
 interface MorningForm {
   purchases: Inventory
   recipe: Recipe
   price: number
+}
+
+interface SceneCustomer extends CustomerVisit {
+  visible: boolean
+  showIndicator: boolean
+  xPercent: number
+  laneOffsetRem: number
 }
 
 function emptyInventory(): Inventory {
@@ -120,6 +139,67 @@ function numberValue(input: string): number {
   return Number(input)
 }
 
+function clamp(value: number, minimum: number, maximum: number): number {
+  return Math.max(minimum, Math.min(maximum, value))
+}
+
+function playbackProgress(playbackMs: number): number {
+  return clamp(playbackMs / DAY_PLAYBACK_MS, 0, 1)
+}
+
+function formatClockTime(progress: number): string {
+  const dayMinutes = BUSINESS_DAY_END_MINUTES - BUSINESS_DAY_START_MINUTES
+  const elapsedMinutes =
+    progress >= 1 ? dayMinutes : Math.floor(dayMinutes * clamp(progress, 0, 1))
+  const totalMinutes = BUSINESS_DAY_START_MINUTES + elapsedMinutes
+  const hour24 = Math.floor(totalMinutes / 60)
+  const minutes = totalMinutes % 60
+  const suffix = hour24 >= 12 ? 'PM' : 'AM'
+  const hour12 = hour24 % 12 === 0 ? 12 : hour24 % 12
+
+  return `${hour12}:${minutes.toString().padStart(2, '0')} ${suffix}`
+}
+
+function visitExitProgress(visit: CustomerVisit): number {
+  return clamp(visit.arrivalProgress + CUSTOMER_TRAVEL_WINDOW, 0, 1)
+}
+
+function visitDecisionWindow(visit: CustomerVisit): {
+  start: number
+  end: number
+} {
+  const exit = visitExitProgress(visit)
+  const start = Math.min(exit, visit.arrivalProgress + CUSTOMER_DECISION_OFFSET)
+
+  return {
+    start,
+    end: Math.min(exit, start + CUSTOMER_INDICATOR_WINDOW),
+  }
+}
+
+function sceneCustomer(visit: CustomerVisit, progress: number): SceneCustomer {
+  const exit = visitExitProgress(visit)
+  const visible = progress >= visit.arrivalProgress && progress <= exit
+  const travelRatio = visible ? (progress - visit.arrivalProgress) / Math.max(exit - visit.arrivalProgress, 0.001) : 0
+  const decisionWindow = visitDecisionWindow(visit)
+
+  return {
+    ...visit,
+    visible,
+    showIndicator: progress >= decisionWindow.start && progress <= decisionWindow.end,
+    xPercent: 105 - travelRatio * 118,
+    laneOffsetRem: (visit.customerIndex % 3) * 0.28,
+  }
+}
+
+function visitsResolvedByProgress(visits: CustomerVisit[], progress: number): CustomerVisit[] {
+  return visits.filter((visit) => progress >= visitDecisionWindow(visit).start)
+}
+
+function formatSimulationSpeed(value: number): string {
+  return `${value}x`
+}
+
 function MetricCard({
   label,
   value,
@@ -208,6 +288,46 @@ function ActiveCardsPanel({ state }: { state: GameState }): JSX.Element {
           })}
         </ul>
       )}
+    </section>
+  )
+}
+
+function DevToolsPanel({
+  simulationSpeed,
+  onSimulationSpeedChange,
+  onResetRun,
+}: {
+  simulationSpeed: number
+  onSimulationSpeedChange: (nextValue: number) => void
+  onResetRun: () => void
+}): JSX.Element {
+  return (
+    <section className="panel">
+      <p className="eyebrow">Dev tools</p>
+      <h3>Dev Tools</h3>
+      <div className="field-grid">
+        <label className="field" htmlFor="simulation-speed">
+          <span className="field-label">Simulation Speed</span>
+          <select
+            className="field-input"
+            id="simulation-speed"
+            value={simulationSpeed}
+            onChange={(event) => onSimulationSpeedChange(Number(event.target.value))}
+          >
+            {SIMULATION_SPEED_OPTIONS.map((speed) => (
+              <option key={speed} value={speed}>
+                {formatSimulationSpeed(speed)}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <div className="action-row">
+        <button className="action-button action-button-secondary" onClick={onResetRun}>
+          Reset Current Run
+        </button>
+        <p className="muted">Clears the saved run and starts a fresh day-one state.</p>
+      </div>
     </section>
   )
 }
@@ -440,6 +560,125 @@ function EveningScreen({
   )
 }
 
+function DayScreen({
+  state,
+  playbackMs,
+}: {
+  state: GameState
+  playbackMs: number
+}): JSX.Element {
+  const report = state.pendingReport
+
+  if (report === null) {
+    return (
+      <section className="phase-shell">
+        <div className="panel">
+          <p className="muted">Day playback data is missing.</p>
+        </div>
+      </section>
+    )
+  }
+
+  const progress = playbackProgress(playbackMs)
+  const clock = formatClockTime(progress)
+  const customers = report.customerVisits
+    .map((visit) => sceneCustomer(visit, progress))
+    .filter((visit) => visit.visible)
+  const resolvedVisits = visitsResolvedByProgress(report.customerVisits, progress)
+  const purchases = resolvedVisits.filter((visit) => visit.outcome === 'buy').length
+  const passed = resolvedVisits.filter((visit) => visit.outcome === 'skip').length
+  const soldOut = resolvedVisits.filter((visit) => visit.outcome === 'soldOut').length
+
+  return (
+    <section className="phase-shell">
+      <div className="panel phase-header">
+        <div>
+          <p className="eyebrow">Day simulation</p>
+          <h2>Day Rush</h2>
+          <p className="muted">
+            {defaultBalanceConfig.weatherProfiles[report.weather].label} traffic is rolling by. Watch the crowd react before the books close.
+          </p>
+        </div>
+        <div className="summary-chip-row">
+          <span className="summary-chip">Time {clock}</span>
+          <span className="summary-chip">Foot traffic {report.potentialCustomers}</span>
+        </div>
+      </div>
+
+      <section className="panel day-scene-panel">
+        <div className="scene-skyline" aria-hidden="true">
+          <div className="scene-building scene-building-teal" />
+          <div className="scene-building scene-building-gold" />
+          <div className="scene-tree" />
+        </div>
+
+        <div className="day-clock-row">
+          <div>
+            <p className="eyebrow">Business clock</p>
+            <strong aria-label="Business clock" className="day-clock-value">
+              {clock}
+            </strong>
+          </div>
+          <div className="summary-chip-row">
+            <span className="summary-chip">Sold {purchases}</span>
+            <span className="summary-chip">Passed {passed + soldOut}</span>
+          </div>
+        </div>
+
+        <div className="day-scene" role="img" aria-label={`Lemonade stand day scene at ${clock}`}>
+          <div className="scene-road" aria-hidden="true" />
+          <div className="scene-sidewalk" aria-hidden="true" />
+          <div className="stand-cart" aria-hidden="true">
+            <div className="stand-canopy">
+              <span>Lemon Stand</span>
+            </div>
+            <div className="stand-counter">
+              <div className="stand-window">
+                <div className="vendor-head" />
+                <div className="vendor-body" />
+              </div>
+            </div>
+            <div className="stand-wheel stand-wheel-left" />
+            <div className="stand-wheel stand-wheel-right" />
+          </div>
+
+          <div className="customer-lane">
+            {customers.map((visit) => (
+              <div
+                className={`customer customer-${visit.outcome}`}
+                key={visit.customerIndex}
+                style={{
+                  left: `${visit.xPercent}%`,
+                  bottom: `${1.5 + visit.laneOffsetRem}rem`,
+                }}
+              >
+                {visit.showIndicator ? (
+                  <span className={`customer-indicator customer-indicator-${visit.indicator}`} aria-label={visit.outcome === 'buy' ? 'Purchase decision yes' : 'Purchase decision no'}>
+                    {visit.indicator === 'check' ? '✅' : '❌'}
+                  </span>
+                ) : null}
+                <span className="stick-head" />
+                <span className="stick-body" />
+                <span className="stick-arm stick-arm-left" />
+                <span className="stick-arm stick-arm-right" />
+                <span className="stick-leg stick-leg-left" />
+                <span className="stick-leg stick-leg-right" />
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="report-grid">
+          <MetricCard label="Resolved" value={`${resolvedVisits.length}/${report.potentialCustomers}`} accent />
+          <MetricCard label="Purchases" value={`${purchases}`} />
+          <MetricCard label="Walked On" value={`${passed}`} />
+          <MetricCard label="Sold Out" value={`${soldOut}`} />
+        </div>
+      </section>
+    </section>
+  )
+}
+
 function NightScreen({
   state,
   onPick,
@@ -532,14 +771,104 @@ function GameOverScreen({
 function App(): JSX.Element {
   const [state, setState] = useState<GameState>(() => readStoredGame())
   const [error, setError] = useState<string | null>(null)
+  const [dayPlaybackMs, setDayPlaybackMs] = useState(0)
+  const [simulationSpeed, setSimulationSpeed] = useState(DEFAULT_SIMULATION_SPEED)
 
   useEffect(() => {
     window.localStorage.setItem(SAVE_KEY, JSON.stringify(saveGame(state)))
   }, [state])
 
+  useEffect(() => {
+    if (state.phase !== 'day') {
+      return
+    }
+
+    const intervalId = window.setInterval(() => {
+      setDayPlaybackMs((current) =>
+        Math.min(current + DAY_TICK_MS * simulationSpeed, DAY_PLAYBACK_MS + DAY_TRANSITION_DELAY_MS),
+      )
+    }, DAY_TICK_MS)
+
+    return () => {
+      window.clearInterval(intervalId)
+    }
+  }, [simulationSpeed, state.phase, state.day])
+
+  useEffect(() => {
+    if (state.phase !== 'day' || dayPlaybackMs < DAY_PLAYBACK_MS + DAY_TRANSITION_DELAY_MS) {
+      return
+    }
+
+    startTransition(() => {
+      setState((current) => (current.phase === 'day' ? applyEvening(current) : current))
+    })
+  }, [dayPlaybackMs, state.phase])
+
+  useEffect(() => {
+    const appWindow = window as Window & {
+      advanceTime?: (ms: number) => void
+      render_game_to_text?: () => string
+    }
+
+    appWindow.advanceTime = (ms: number) => {
+      if (state.phase !== 'day') {
+        return
+      }
+
+      setDayPlaybackMs((current) =>
+        Math.min(
+          current + Math.max(0, Math.round(ms * simulationSpeed)),
+          DAY_PLAYBACK_MS + DAY_TRANSITION_DELAY_MS,
+        ),
+      )
+    }
+
+    appWindow.render_game_to_text = () =>
+      JSON.stringify({
+        phase: state.phase,
+        day: state.day,
+        clock: state.phase === 'day' ? formatClockTime(playbackProgress(dayPlaybackMs)) : null,
+        potentialCustomers: state.pendingReport?.potentialCustomers ?? null,
+        visibleCustomers:
+          state.phase === 'day' && state.pendingReport !== null
+            ? state.pendingReport.customerVisits
+                .map((visit) => sceneCustomer(visit, playbackProgress(dayPlaybackMs)))
+                .filter((visit) => visit.visible)
+                .map((visit) => ({
+                  customerIndex: visit.customerIndex,
+                  outcome: visit.outcome,
+                  showIndicator: visit.showIndicator,
+                }))
+            : [],
+        money: state.money,
+        reputation: state.reputation,
+        inventory: state.inventory,
+        simulationSpeed,
+      })
+
+    return () => {
+      delete appWindow.advanceTime
+      delete appWindow.render_game_to_text
+    }
+  }, [dayPlaybackMs, simulationSpeed, state])
+
+  const resetRun = (): void => {
+    window.localStorage.removeItem(SAVE_KEY)
+    setError(null)
+    setDayPlaybackMs(0)
+    startTransition(() => {
+      setState(createNewGame())
+    })
+  }
+
+  const updateSimulationSpeed = (nextValue: number): void => {
+    setSimulationSpeed(nextValue)
+  }
+
   const runDay = (form: MorningForm): void => {
     try {
       setError(null)
+      setDayPlaybackMs(0)
       startTransition(() => {
         setState((current) => {
           if (current.phase !== 'morning') {
@@ -554,7 +883,7 @@ function App(): JSX.Element {
             },
           )
 
-          return applyEvening(resolveDay(prepared))
+          return resolveDay(prepared)
         })
       })
     } catch (caughtError) {
@@ -617,6 +946,7 @@ function App(): JSX.Element {
           {state.phase === 'morning' ? (
             <MorningScreen key={`morning-${state.day}`} state={state} onRunDay={runDay} error={error} />
           ) : null}
+          {state.phase === 'day' ? <DayScreen state={state} playbackMs={dayPlaybackMs} /> : null}
           {state.phase === 'evening' && lastReport !== null ? (
             <EveningScreen report={lastReport} onOpenShop={openShop} />
           ) : null}
@@ -627,6 +957,13 @@ function App(): JSX.Element {
         </div>
 
         <aside className="side-column">
+          {IS_DEV ? (
+            <DevToolsPanel
+              simulationSpeed={simulationSpeed}
+              onSimulationSpeedChange={updateSimulationSpeed}
+              onResetRun={resetRun}
+            />
+          ) : null}
           <section className="panel">
             <p className="eyebrow">Inventory</p>
             <h3>What&apos;s on hand</h3>

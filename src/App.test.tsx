@@ -1,8 +1,8 @@
-import { render, screen } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { act, fireEvent, render, screen } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import App, { SAVE_KEY } from './App'
+import { getCardDefinition } from './game/cards'
 import { applyEvening, buyIngredients, createNewGame, generateDraft, resolveDay, saveGame, setStrategy } from './game/engine'
 import type { GameState } from './game/types'
 
@@ -43,33 +43,116 @@ function buildEveningState(): GameState {
   )
 }
 
+function buildDayState(): GameState {
+  return resolveDay(
+    setStrategy(
+      buyIngredients(
+        {
+          ...createNewGame({ seed: 41 }),
+          money: 100,
+          market: {
+            lemons: 0.5,
+            sugar: 0.2,
+            ice: 0.1,
+          },
+        },
+        {
+          lemons: 18,
+          sugar: 18,
+          ice: 18,
+        },
+      ),
+      {
+        recipe: {
+          lemons: 2,
+          sugar: 2,
+          ice: 2,
+        },
+        price: 1.6,
+      },
+    ),
+  )
+}
+
 describe('App', () => {
   beforeEach(() => {
     window.localStorage.clear()
   })
 
-  it('runs the morning flow into evening results', async () => {
-    const user = userEvent.setup()
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('enters the visible day phase after the morning flow', async () => {
+    vi.useFakeTimers()
     render(<App />)
 
-    await user.clear(screen.getByLabelText(/buy lemons/i))
-    await user.type(screen.getByLabelText(/buy lemons/i), '6')
-    await user.clear(screen.getByLabelText(/buy sugar/i))
-    await user.type(screen.getByLabelText(/buy sugar/i), '6')
-    await user.clear(screen.getByLabelText(/buy ice/i))
-    await user.type(screen.getByLabelText(/buy ice/i), '6')
-    await user.clear(screen.getByLabelText(/lemons per cup/i))
-    await user.type(screen.getByLabelText(/lemons per cup/i), '2')
-    await user.clear(screen.getByLabelText(/sugar per cup/i))
-    await user.type(screen.getByLabelText(/sugar per cup/i), '2')
-    await user.clear(screen.getByLabelText(/^ice per cup$/i))
-    await user.type(screen.getByLabelText(/^ice per cup$/i), '2')
-    await user.clear(screen.getByLabelText(/price per cup/i))
-    await user.type(screen.getByLabelText(/price per cup/i), '1.50')
-    await user.click(screen.getByRole('button', { name: /run day/i }))
+    fireEvent.click(screen.getByRole('button', { name: /run day/i }))
 
-    expect(await screen.findByRole('heading', { name: /evening results/i })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: /day rush/i })).toBeInTheDocument()
+    expect(screen.getByLabelText(/business clock/i)).toHaveTextContent('8:00 AM')
+  })
+
+  it('auto-advances from the day phase into evening results', async () => {
+    vi.useFakeTimers()
+    render(<App />)
+
+    fireEvent.click(screen.getByRole('button', { name: /run day/i }))
+
+    await act(async () => {
+      vi.advanceTimersByTime(9800)
+    })
+
+    expect(screen.getByRole('heading', { name: /evening results/i })).toBeInTheDocument()
     expect(screen.getByText(/cups sold/i)).toBeInTheDocument()
+  })
+
+  it('advances the day clock during playback', async () => {
+    vi.useFakeTimers()
+    persistState(buildDayState())
+
+    render(<App />)
+
+    expect(screen.getByLabelText(/business clock/i)).toHaveTextContent('8:00 AM')
+
+    await act(async () => {
+      vi.advanceTimersByTime(4500)
+    })
+
+    expect(screen.getByLabelText(/business clock/i)).toHaveTextContent('1:00 PM')
+  })
+
+  it('shows dev controls and resets the current run', () => {
+    persistState(buildEveningState())
+
+    render(<App />)
+
+    expect(screen.getByRole('heading', { name: /dev tools/i })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /reset current run/i }))
+
+    expect(screen.getByRole('heading', { name: /morning setup/i })).toBeInTheDocument()
+    expect(window.localStorage.getItem(SAVE_KEY)).not.toBeNull()
+    expect(screen.getByText(/forecast:/i)).toBeInTheDocument()
+  })
+
+  it('applies the dev simulation speed control to day playback', async () => {
+    vi.useFakeTimers()
+    persistState(buildDayState())
+
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/simulation speed/i), {
+      target: {
+        value: '0.5',
+      },
+    })
+
+    await act(async () => {
+      vi.advanceTimersByTime(4500)
+    })
+
+    expect(screen.getByLabelText(/business clock/i)).toHaveTextContent('10:30 AM')
   })
 
   it('disables unaffordable paid cards in the night draft', () => {
@@ -82,7 +165,15 @@ describe('App', () => {
 
     render(<App />)
 
-    expect(screen.getByRole('button', { name: /pick merchandising/i })).toBeDisabled()
+    const paidCards = nightState.draftOptions
+      .map((cardId) => getCardDefinition(cardId))
+      .filter((card) => card.cost > 0)
+
+    expect(paidCards.length).toBeGreaterThan(0)
+
+    paidCards.forEach((card) => {
+      expect(screen.getByRole('button', { name: new RegExp(`pick ${card.name}`, 'i') })).toBeDisabled()
+    })
   })
 
   it('renders the evening breakdown from a saved run', () => {
@@ -102,6 +193,21 @@ describe('App', () => {
 
     expect(screen.getByRole('heading', { name: /night market/i })).toBeInTheDocument()
     expect(screen.getByText(/choose one upgrade/i)).toBeInTheDocument()
+  })
+
+  it('replays a saved day state and completes into evening', async () => {
+    vi.useFakeTimers()
+    persistState(buildDayState())
+
+    render(<App />)
+
+    expect(screen.getByRole('heading', { name: /day rush/i })).toBeInTheDocument()
+
+    await act(async () => {
+      vi.advanceTimersByTime(9800)
+    })
+
+    expect(screen.getByRole('heading', { name: /evening results/i })).toBeInTheDocument()
   })
 
   it('shows days survived first on the game over summary', () => {

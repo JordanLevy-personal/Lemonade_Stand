@@ -1,0 +1,1 @@
+{"phase":"day","day":1,"clock":"12:15 PM","potentialCustomers":10,"visibleCustomers":[{"customerIndex":4,"outcome":"soldOut","showIndicator":true},{"customerIndex":5,"outcome":"skip","showIndicator":true},{"customerIndex":6,"outcome":"soldOut","showIndicator":false}],"money":20,"reputation":50,"inventory":{"lemons":0,"sugar":0,"ice":0},"simulationSpeed":1}

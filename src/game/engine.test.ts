@@ -61,6 +61,23 @@ function runToEvening(
   )
 }
 
+function runToDay(
+  state: GameState,
+  purchases: Inventory,
+  recipe: Recipe,
+  price: number,
+): GameState {
+  return resolveDay(
+    setStrategy(
+      buyIngredients(state, purchases),
+      {
+        recipe,
+        price,
+      },
+    ),
+  )
+}
+
 describe('engine', () => {
   it('creates a new game with defaults and round-trips through save/load', () => {
     const state = createNewGame({ seed: 77 })
@@ -258,5 +275,96 @@ describe('engine', () => {
     expect(second.reputation).toBe(first.reputation)
     expect(second.inventory).toEqual(first.inventory)
     expect(second.rng).toEqual(first.rng)
+  })
+
+  it('records one customer visit per potential customer in the pending day report', () => {
+    const state = runToDay(
+      prepareState({
+        weather: 'sunny',
+        reputation: 58,
+      }),
+      {
+        lemons: 24,
+        sugar: 24,
+        ice: 24,
+      },
+      {
+        lemons: 2,
+        sugar: 2,
+        ice: 2,
+      },
+      1.4,
+    )
+
+    expect(state.phase).toBe('day')
+    expect(state.pendingReport?.customerVisits).toHaveLength(state.pendingReport?.potentialCustomers ?? 0)
+  })
+
+  it('creates deterministic, ordered arrival progress for customer visits', () => {
+    const first = runToDay(
+      createNewGame({ seed: 321 }),
+      {
+        lemons: 20,
+        sugar: 20,
+        ice: 20,
+      },
+      {
+        lemons: 2,
+        sugar: 2,
+        ice: 2,
+      },
+      1.5,
+    )
+    const second = runToDay(
+      createNewGame({ seed: 321 }),
+      {
+        lemons: 20,
+        sugar: 20,
+        ice: 20,
+      },
+      {
+        lemons: 2,
+        sugar: 2,
+        ice: 2,
+      },
+      1.5,
+    )
+
+    const arrivals = first.pendingReport?.customerVisits.map((visit) => visit.arrivalProgress) ?? []
+
+    expect(second.pendingReport?.customerVisits).toEqual(first.pendingReport?.customerVisits)
+    expect(arrivals.every((arrival) => arrival >= 0 && arrival <= 1)).toBe(true)
+    expect(arrivals.every((arrival, index) => index === 0 || arrival >= arrivals[index - 1])).toBe(true)
+  })
+
+  it('keeps customer visit outcomes aligned with the aggregate report totals', () => {
+    const state = runToDay(
+      prepareState({
+        weather: 'hot',
+        reputation: 62,
+      }),
+      {
+        lemons: 6,
+        sugar: 6,
+        ice: 6,
+      },
+      {
+        lemons: 2,
+        sugar: 2,
+        ice: 2,
+      },
+      1.1,
+    )
+
+    const visits = state.pendingReport?.customerVisits ?? []
+    const bought = visits.filter((visit) => visit.outcome === 'buy')
+    const soldOut = visits.filter((visit) => visit.outcome === 'soldOut')
+    const skipped = visits.filter((visit) => visit.outcome === 'skip')
+
+    expect(bought).toHaveLength(state.pendingReport?.cupsSold ?? 0)
+    expect(soldOut).toHaveLength(state.pendingReport?.turnedAway ?? 0)
+    expect(skipped).toHaveLength(
+      (state.pendingReport?.potentialCustomers ?? 0) - (state.pendingReport?.cupsSold ?? 0) - (state.pendingReport?.turnedAway ?? 0),
+    )
   })
 })

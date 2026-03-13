@@ -6,6 +6,7 @@ import type {
   BalanceConfig,
   CardDefinition,
   CardId,
+  CustomerVisit,
   DailyMarket,
   DailyPlan,
   DailyReport,
@@ -185,6 +186,45 @@ function calculateReputationDelta(report: DailyReport): number {
 
   const volumeWeight = Math.max(4, Math.round(report.ratedSales * 0.8))
   return roundReputation((report.averageSatisfaction - 0.55) * volumeWeight)
+}
+
+function buildArrivalProgresses(
+  count: number,
+  rngState: GameState['rng'],
+): [number[], GameState['rng']] {
+  if (count === 0) {
+    return [[], rngState]
+  }
+
+  let rng = rngState
+  let cumulative = 0
+  const arrivals: number[] = []
+
+  for (let index = 0; index < count; index += 1) {
+    const [roll, nextRng] = nextFloat(rng)
+    rng = nextRng
+    const safeRoll = Math.max(roll, Number.EPSILON)
+    const gap = -Math.log(1 - safeRoll)
+
+    cumulative += gap
+    arrivals.push(cumulative)
+  }
+
+  const firstArrival = arrivals[0]
+  const lastArrival = arrivals[arrivals.length - 1]
+  const playbackStart = 0.06
+  const playbackEnd = 0.78
+
+  if (lastArrival === firstArrival) {
+    return [[playbackStart], rng]
+  }
+
+  const normalized = arrivals.map((arrival) => {
+    const progress = (arrival - firstArrival) / (lastArrival - firstArrival)
+    return Number((playbackStart + progress * (playbackEnd - playbackStart)).toFixed(4))
+  })
+
+  return [normalized, rng]
 }
 
 function clampReputation(state: GameState, balance: BalanceConfig, reputation: number): number {
@@ -503,6 +543,9 @@ export function resolveDay(
   let satisfactionTotal = 0
   let ratedSales = 0
   let flatReputationAdjustment = 0
+  const [arrivalProgresses, nextRng] = buildArrivalProgresses(demand, rng)
+  rng = nextRng
+  const customerVisits: CustomerVisit[] = []
 
   for (let customerIndex = 0; customerIndex < demand; customerIndex += 1) {
     const stateForCustomer: GameState = {
@@ -564,11 +607,23 @@ export function resolveDay(
     const wantsToBuy = customerContext.forcePurchase || roll < buyChance
 
     if (!wantsToBuy) {
+      customerVisits.push({
+        customerIndex,
+        arrivalProgress: arrivalProgresses[customerIndex],
+        outcome: 'skip',
+        indicator: 'x',
+      })
       continue
     }
 
     if (!canServeCup(inventory, state.plan.recipe)) {
       turnedAway += 1
+      customerVisits.push({
+        customerIndex,
+        arrivalProgress: arrivalProgresses[customerIndex],
+        outcome: 'soldOut',
+        indicator: 'x',
+      })
       continue
     }
 
@@ -645,6 +700,12 @@ export function resolveDay(
 
     money = roundMoney(money + afterSaleContext.moneyAdjustment)
     flatReputationAdjustment += afterSaleContext.reputationAdjustment
+    customerVisits.push({
+      customerIndex,
+      arrivalProgress: arrivalProgresses[customerIndex],
+      outcome: 'buy',
+      indicator: 'check',
+    })
   }
 
   const averageSatisfaction = ratedSales === 0 ? 0 : satisfactionTotal / ratedSales
@@ -670,6 +731,7 @@ export function resolveDay(
     moneyAfterRent: money,
     startingReputation: state.reputation,
     flatReputationAdjustment,
+    customerVisits,
   }
 
   return {
@@ -756,8 +818,12 @@ export function applyEvening(
     phase = 'gameOver'
   }
 
-  const finalizedReport: DailyReport = {
-    ...report,
+  const { flatReputationAdjustment, customerVisits, ...finalizedReport } = report
+  void flatReputationAdjustment
+  void customerVisits
+
+  const settledReport: DailyReport = {
+    ...finalizedReport,
     reputationChange: reputation - report.startingReputation,
     moneyAfterRent: money,
     notes: [...report.notes],
@@ -774,8 +840,8 @@ export function applyEvening(
     previousRecipe: state.plan.recipe,
     activeCards: decrementTemporaryCards(state.activeCards),
     pendingReport: null,
-    lastReport: finalizedReport,
-    history: [...state.history, finalizedReport],
+    lastReport: settledReport,
+    history: [...state.history, settledReport],
   }
 }
 

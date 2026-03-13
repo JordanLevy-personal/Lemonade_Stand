@@ -235,6 +235,280 @@
   gap: 1rem;
 }
 
+.day-scene-panel {
+  display: grid;
+  gap: 1rem;
+  overflow: hidden;
+}
+
+.scene-skyline {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  min-height: 4.5rem;
+  margin-bottom: -0.35rem;
+  padding-inline: 0.35rem;
+}
+
+.scene-building {
+  width: min(30%, 11rem);
+  border-radius: 1.1rem 1.1rem 0.6rem 0.6rem;
+  border: 1px solid rgba(34, 50, 39, 0.12);
+  box-shadow: inset 0 -10px 0 rgba(34, 50, 39, 0.12);
+}
+
+.scene-building-teal {
+  height: 5rem;
+  background:
+    linear-gradient(90deg, rgba(255, 255, 255, 0.22) 0.4rem, transparent 0.4rem),
+    linear-gradient(180deg, #5f8691, #44656d);
+}
+
+.scene-building-gold {
+  height: 6rem;
+  background:
+    linear-gradient(90deg, rgba(255, 255, 255, 0.18) 0.4rem, transparent 0.4rem),
+    linear-gradient(180deg, #d2ab67, #a97a3d);
+}
+
+.scene-tree {
+  width: 6.5rem;
+  height: 4.8rem;
+  border-radius: 1.8rem 1.8rem 0.8rem 0.8rem;
+  background:
+    radial-gradient(circle at 30% 28%, #5ea55c 0 30%, transparent 31%),
+    radial-gradient(circle at 60% 24%, #4f924f 0 34%, transparent 35%),
+    radial-gradient(circle at 44% 52%, #3d7a42 0 38%, transparent 39%),
+    linear-gradient(180deg, transparent 0 58%, #6d4b2e 58% 100%);
+}
+
+.day-clock-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.day-clock-value {
+  font-size: clamp(2rem, 3vw, 2.8rem);
+  color: var(--ink-strong);
+}
+
+.day-scene {
+  position: relative;
+  min-height: 22.5rem;
+  overflow: hidden;
+  border-radius: 1.5rem;
+  border: 1px solid rgba(53, 91, 61, 0.16);
+  background:
+    radial-gradient(circle at 15% 14%, rgba(255, 248, 184, 0.95), transparent 20%),
+    linear-gradient(180deg, #c5e6ef 0%, #dff0f4 34%, #efe1c2 35%, #efe1c2 100%);
+}
+
+.scene-road,
+.scene-sidewalk,
+.customer-lane,
+.stand-cart {
+  position: absolute;
+}
+
+.scene-road {
+  inset: auto 0 0;
+  height: 26%;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.12), transparent 22%),
+    linear-gradient(180deg, #807a75, #68615b);
+}
+
+.scene-road::after {
+  content: '';
+  position: absolute;
+  left: 8%;
+  right: 8%;
+  top: 50%;
+  border-top: 0.35rem dashed rgba(255, 245, 182, 0.72);
+}
+
+.scene-sidewalk {
+  inset: auto 0 22%;
+  height: 13%;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.22), transparent 30%),
+    linear-gradient(180deg, #cdc6bc, #b0a79d);
+  border-top: 2px solid rgba(76, 76, 76, 0.18);
+  border-bottom: 2px solid rgba(76, 76, 76, 0.18);
+}
+
+.scene-sidewalk::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(90deg, rgba(74, 74, 74, 0.08) 1px, transparent 1px),
+    linear-gradient(rgba(74, 74, 74, 0.08) 1px, transparent 1px);
+  background-size: 5rem 100%, 100% 100%;
+}
+
+.stand-cart {
+  left: clamp(24%, 33vw, 36%);
+  bottom: 3.9rem;
+  width: clamp(12rem, 23vw, 15.5rem);
+  height: 9.75rem;
+}
+
+.stand-canopy {
+  position: absolute;
+  inset: 0.35rem 0.75rem auto;
+  padding: 0.7rem 1rem;
+  border-radius: 1rem 1rem 0.55rem 0.55rem;
+  background: linear-gradient(180deg, #1b6a5f, #164f47);
+  border: 4px solid #f3c247;
+  color: #fff4c1;
+  text-align: center;
+  font-family: 'Iowan Old Style', 'Palatino Linotype', serif;
+  font-size: clamp(1.1rem, 2vw, 1.45rem);
+  letter-spacing: 0.04em;
+  box-shadow: 0 10px 16px rgba(24, 51, 47, 0.22);
+}
+
+.stand-counter {
+  position: absolute;
+  inset: 2.5rem 0 1rem;
+  border-radius: 0.9rem;
+  background:
+    linear-gradient(135deg, rgba(255, 225, 132, 0.92) 0 30%, rgba(225, 169, 40, 0.92) 30% 34%, rgba(255, 225, 132, 0.92) 34% 64%, rgba(225, 169, 40, 0.92) 64% 68%, rgba(255, 225, 132, 0.92) 68% 100%),
+    linear-gradient(180deg, #ffd76c, #e5ae1f);
+  border: 4px solid #b98616;
+  box-shadow: inset 0 0 0 3px rgba(255, 243, 200, 0.45);
+}
+
+.stand-window {
+  position: absolute;
+  left: 50%;
+  bottom: 2.15rem;
+  width: 3.35rem;
+  height: 3.35rem;
+  transform: translateX(-50%);
+  border-radius: 1rem 1rem 0.5rem 0.5rem;
+  background: rgba(255, 246, 215, 0.7);
+}
+
+.vendor-head {
+  position: absolute;
+  left: 50%;
+  top: 0.45rem;
+  width: 1rem;
+  height: 1rem;
+  border-radius: 50%;
+  transform: translateX(-50%);
+  background: #f0b37a;
+  box-shadow: 0 0 0 2px rgba(34, 50, 39, 0.08);
+}
+
+.vendor-body {
+  position: absolute;
+  left: 50%;
+  top: 1.35rem;
+  width: 1.5rem;
+  height: 2rem;
+  transform: translateX(-50%);
+  border-radius: 0.8rem 0.8rem 0.3rem 0.3rem;
+  background: linear-gradient(180deg, #fff8de, #d99622);
+}
+
+.stand-wheel {
+  position: absolute;
+  bottom: 0;
+  width: 1.45rem;
+  height: 1.45rem;
+  border-radius: 50%;
+  background: #303534;
+  box-shadow: inset 0 0 0 0.35rem #a7b7b6;
+}
+
+.stand-wheel-left {
+  left: 1.1rem;
+}
+
+.stand-wheel-right {
+  right: 1.1rem;
+}
+
+.customer-lane {
+  inset: 0 0 15% 0;
+  pointer-events: none;
+}
+
+.customer {
+  position: absolute;
+  width: 2.9rem;
+  height: 5.8rem;
+  transform: translateX(-50%);
+}
+
+.customer-indicator {
+  position: absolute;
+  left: 50%;
+  bottom: 4.8rem;
+  transform: translateX(-50%);
+  font-size: 1.45rem;
+  filter: drop-shadow(0 4px 6px rgba(34, 50, 39, 0.16));
+}
+
+.stick-head,
+.stick-body,
+.stick-arm,
+.stick-leg {
+  position: absolute;
+  left: 50%;
+  background: #314136;
+  transform-origin: center top;
+}
+
+.stick-head {
+  top: 0.45rem;
+  width: 1rem;
+  height: 1rem;
+  border-radius: 50%;
+  transform: translateX(-50%);
+}
+
+.stick-body {
+  top: 1.4rem;
+  width: 0.22rem;
+  height: 2.1rem;
+  transform: translateX(-50%);
+}
+
+.stick-arm {
+  top: 2.1rem;
+  width: 0.18rem;
+  height: 1.25rem;
+}
+
+.stick-arm-left {
+  transform: translateX(-0.4rem) rotate(50deg);
+}
+
+.stick-arm-right {
+  transform: translateX(0.22rem) rotate(-50deg);
+}
+
+.stick-leg {
+  top: 3rem;
+  width: 0.18rem;
+  height: 1.3rem;
+}
+
+.stick-leg-left {
+  transform: translateX(-0.3rem) rotate(18deg);
+}
+
+.stick-leg-right {
+  transform: translateX(0.15rem) rotate(-18deg);
+}
+
 @keyframes rise {
   from {
     opacity: 0;
@@ -251,5 +525,25 @@
   .hero-banner,
   .dashboard-grid {
     grid-template-columns: 1fr;
+  }
+
+  .stand-cart {
+    left: 50%;
+    transform: translateX(-50%);
+  }
+}
+
+@media (max-width: 640px) {
+  .day-scene {
+    min-height: 20rem;
+  }
+
+  .scene-skyline {
+    min-height: 3.5rem;
+  }
+
+  .stand-cart {
+    width: 13rem;
+    bottom: 3.7rem;
   }
 }
