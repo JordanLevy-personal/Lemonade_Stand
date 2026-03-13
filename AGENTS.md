@@ -29,3 +29,7 @@
 - New session or new workstream: create a new task with `$new-task`.
 - Existing task continuation: locate the relevant task folder and continue updating its `progress_log.md`.
 - Use the task directory as the canonical home for task-specific artifacts.
+
+## UI & Style Guidelines
+
+- Whenever modifying the user interface or generating new visual assets, consult `docs/STYLE.md` to ensure aesthetic consistency with the project's requirements.

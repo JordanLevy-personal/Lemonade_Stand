@@ -1,0 +1,4 @@
+interface:
+  display_name: "New Task"
+  short_description: "Create a tracked task workspace"
+  default_prompt: "Use $new-task to interview me, create a task folder, and write spec.md plus progress_log.md."

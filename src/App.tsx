@@ -1,5 +1,6 @@
 import { startTransition, useEffect, useState } from 'react'
 import type { JSX } from 'react'
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 
 import './App.css'
 import { defaultBalanceConfig } from './game/balance'
@@ -17,6 +18,15 @@ import {
   skipDraft,
 } from './game/engine'
 import type { CardId, CustomerVisit, DailyReport, GameState, Inventory, Recipe } from './game/types'
+
+import CardClockIcon from './assets/cards/card_clock.png'
+import CardLemonIcon from './assets/cards/card_lemon.png'
+import Customer1Sprite from './assets/customers/customer_1.png'
+import Customer2Sprite from './assets/customers/customer_2.png'
+import StandSprite from './assets/stand.png'
+import StandTier1Sprite from './assets/stand_tier_1.png'
+import StandTier3Sprite from './assets/stand_tier_3.png'
+
 
 export const SAVE_KEY = 'roguelike-lemonade-stand-save-v1'
 const IS_DEV = import.meta.env.DEV
@@ -43,6 +53,7 @@ interface SceneCustomer extends CustomerVisit {
   showIndicator: boolean
   xPercent: number
   laneOffsetRem: number
+  isPaused: boolean
 }
 
 function emptyInventory(): Inventory {
@@ -183,12 +194,32 @@ function sceneCustomer(visit: CustomerVisit, progress: number): SceneCustomer {
   const travelRatio = visible ? (progress - visit.arrivalProgress) / Math.max(exit - visit.arrivalProgress, 0.001) : 0
   const decisionWindow = visitDecisionWindow(visit)
 
+  // Target a varied "center" for each customer so they don't overlap perfectly
+  const pauseCenterRatio = 0.42 + (Math.abs(Math.sin(visit.customerIndex * 4321.1)) * 0.16) // center is between 0.42 to 0.58 of path
+
+  // Use the same time window for pausing (40% to 60% of their journey)
+  const startPauseTime = 0.4
+  const endPauseTime = 0.6
+
+  let tweakedRatio = travelRatio
+  if (travelRatio < startPauseTime) {
+    // 0 to pause point
+    tweakedRatio = travelRatio * (pauseCenterRatio / startPauseTime)
+  } else if (travelRatio < endPauseTime) {
+    // pause at pseudo-random center
+    tweakedRatio = pauseCenterRatio
+  } else {
+    // pause point to 1.0
+    tweakedRatio = pauseCenterRatio + ((travelRatio - endPauseTime) * ((1.0 - pauseCenterRatio) / (1.0 - endPauseTime)))
+  }
+
   return {
     ...visit,
     visible,
     showIndicator: progress >= decisionWindow.start && progress <= decisionWindow.end,
-    xPercent: 105 - travelRatio * 118,
+    xPercent: 105 - tweakedRatio * 118,
     laneOffsetRem: (visit.customerIndex % 3) * 0.28,
+    isPaused: travelRatio >= 0.4 && travelRatio < 0.6,
   }
 }
 
@@ -238,6 +269,40 @@ function NumberField({
       <input
         className="field-input"
         type="number"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(event) => onChange(numberValue(event.target.value))}
+      />
+    </label>
+  )
+}
+
+function RangeSliderField({
+  label,
+  value,
+  min,
+  max,
+  step = 1,
+  onChange,
+}: {
+  label: string
+  value: number
+  min: number
+  max: number
+  step?: number
+  onChange: (nextValue: number) => void
+}): JSX.Element {
+  return (
+    <label className="field">
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <span className="field-label">{label}</span>
+        <strong className="metric-value" style={{ fontSize: '1.2rem' }}>{Number.isInteger(step) ? value : value.toFixed(1)}</strong>
+      </div>
+      <input
+        className="field-slider"
+        type="range"
         min={min}
         max={max}
         step={step}
@@ -422,11 +487,12 @@ function MorningScreen({
           <p className="eyebrow">Recipe</p>
           <h3>Set the pitch</h3>
           <div className="field-grid">
-            <NumberField
+            <RangeSliderField
               label="Lemons per Cup"
               value={form.recipe.lemons}
               min={0}
               max={5}
+              step={0.1}
               onChange={(value) =>
                 setForm((current) => ({
                   ...current,
@@ -437,11 +503,12 @@ function MorningScreen({
                 }))
               }
             />
-            <NumberField
+            <RangeSliderField
               label="Sugar per Cup"
               value={form.recipe.sugar}
               min={0}
               max={5}
+              step={0.1}
               onChange={(value) =>
                 setForm((current) => ({
                   ...current,
@@ -452,11 +519,12 @@ function MorningScreen({
                 }))
               }
             />
-            <NumberField
+            <RangeSliderField
               label="Ice per Cup"
               value={form.recipe.ice}
               min={0}
               max={5}
+              step={0.1}
               onChange={(value) =>
                 setForm((current) => ({
                   ...current,
@@ -503,11 +571,19 @@ function MorningScreen({
 
 function EveningScreen({
   report,
+  history,
   onOpenShop,
 }: {
   report: DailyReport
+  history: DailyReport[]
   onOpenShop: () => void
 }): JSX.Element {
+  const chartData = history.map((h, i) => {
+    const previousMoney = i === 0 ? defaultBalanceConfig.startingMoney : history[i - 1].moneyAfterRent
+    const profit = h.moneyAfterRent - previousMoney
+    return { ...h, profit }
+  })
+
   return (
     <section className="phase-shell">
       <div className="panel phase-header">
@@ -531,6 +607,27 @@ function EveningScreen({
       </div>
 
       <div className="phase-grid">
+        <section className="panel chart-panel">
+          <p className="eyebrow">Trends</p>
+          <h3>Revenue & Profit</h3>
+          <div style={{ width: '100%', height: 180, marginTop: '1rem' }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={chartData}>
+                <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
+                <XAxis dataKey="day" hide />
+                <YAxis hide domain={['auto', 'auto']} />
+                <Tooltip 
+                  formatter={(value: any) => formatMoney(Number(value) || 0)}
+                  labelFormatter={(day: any) => `Day ${Number(day) || 0}`}
+                  contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}
+                />
+                <Line type="monotone" dataKey="revenue" name="Revenue" stroke="#e5ae1f" strokeWidth={3} dot={false} />
+                <Line type="monotone" dataKey="profit" name="Profit" stroke="#6ab04c" strokeWidth={3} dot={false} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </section>
+
         <section className="panel">
           <p className="eyebrow">Breakdown</p>
           <h3>Customer reaction</h3>
@@ -625,25 +722,25 @@ function DayScreen({
           </div>
         </div>
 
-        <div className="day-scene" role="img" aria-label={`Lemonade stand day scene at ${clock}`}>
+        <div className={`day-scene weather-${report.weather}`} role="img" aria-label={`Lemonade stand day scene at ${clock}`}>
+          <div className="weather-overlay"></div>
           <div className="scene-road" aria-hidden="true" />
           <div className="scene-sidewalk" aria-hidden="true" />
           <div className="stand-cart" aria-hidden="true">
-            <div className="stand-canopy">
-              <span>Lemon Stand</span>
-            </div>
-            <div className="stand-counter">
-              <div className="stand-window">
-                <div className="vendor-head" />
-                <div className="vendor-body" />
-              </div>
-            </div>
-            <div className="stand-wheel stand-wheel-left" />
-            <div className="stand-wheel stand-wheel-right" />
+            <img 
+              src={
+                state.reputation < 40 ? StandTier1Sprite : 
+                state.reputation > 75 ? StandTier3Sprite : 
+                StandSprite
+              } 
+              alt="Lemonade Stand" 
+              className="stand-sprite" 
+            />
           </div>
 
           <div className="customer-lane">
-            {customers.map((visit) => (
+            {customers.map((visit) => {
+              return (
               <div
                 className={`customer customer-${visit.outcome}`}
                 key={visit.customerIndex}
@@ -653,18 +750,22 @@ function DayScreen({
                 }}
               >
                 {visit.showIndicator ? (
-                  <span className={`customer-indicator customer-indicator-${visit.indicator}`} aria-label={visit.outcome === 'buy' ? 'Purchase decision yes' : 'Purchase decision no'}>
-                    {visit.indicator === 'check' ? '✅' : '❌'}
-                  </span>
+                  <>
+                    <span className={`customer-indicator customer-indicator-${visit.indicator}`} aria-label={visit.outcome === 'buy' ? 'Purchase decision yes' : 'Purchase decision no'}>
+                      {visit.indicator === 'check' ? '✅' : '❌'}
+                    </span>
+                    {visit.outcome === 'buy' && (
+                       <span className="float-money">+{formatMoney(report.pricePerCup)}</span>
+                    )}
+                  </>
                 ) : null}
-                <span className="stick-head" />
-                <span className="stick-body" />
-                <span className="stick-arm stick-arm-left" />
-                <span className="stick-arm stick-arm-right" />
-                <span className="stick-leg stick-leg-left" />
-                <span className="stick-leg stick-leg-right" />
+                <img 
+                  src={visit.customerIndex % 2 === 0 ? Customer1Sprite : Customer2Sprite}
+                  alt="Customer"
+                  className={`customer-sprite ${visit.isPaused ? 'customer-paused' : ''}`}
+                />
               </div>
-            ))}
+            )})}
           </div>
         </div>
 
@@ -714,6 +815,11 @@ function NightScreen({
                 <p className="eyebrow">{card.category}</p>
                 <span className="mini-tag">{formatMoney(card.cost)}</span>
               </div>
+              <img 
+                src={card.id.includes('timer') || card.id.includes('clock') ? CardClockIcon : CardLemonIcon} 
+                alt="" 
+                className="draft-card-icon" 
+              />
               <h3>{card.name}</h3>
               <p className="muted">{card.description}</p>
               <button
@@ -925,11 +1031,8 @@ function App(): JSX.Element {
     <main className="app-shell">
       <header className="hero-banner">
         <div className="hero-copy">
-          <p className="eyebrow">Roguelike Lemonade Stand</p>
-          <h1>Build a citrus empire before the rent curve crushes it.</h1>
-          <p className="hero-text">
-            Each day is a tiny business sim. Each night is a crooked little deckbuilder. Survive as long as you can.
-          </p>
+          <p className="eyebrow">Lemonade Stand</p>
+          <h1>Grow your citrus empire.</h1>
         </div>
         <div className="hero-metrics">
           <MetricCard label="Day" value={`${state.day}`} accent />
@@ -948,7 +1051,7 @@ function App(): JSX.Element {
           ) : null}
           {state.phase === 'day' ? <DayScreen state={state} playbackMs={dayPlaybackMs} /> : null}
           {state.phase === 'evening' && lastReport !== null ? (
-            <EveningScreen report={lastReport} onOpenShop={openShop} />
+            <EveningScreen report={lastReport} history={state.history} onOpenShop={openShop} />
           ) : null}
           {state.phase === 'night' ? (
             <NightScreen state={state} onPick={chooseCard} onSkip={passTonight} />
