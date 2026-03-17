@@ -140,7 +140,6 @@ function getPanelByText(pattern: RegExp): HTMLElement {
 
   return panel as HTMLElement
 }
-
 function emitMessage(message: unknown): void {
   act(() => {
     latestHandlers?.onMessage(message as never)
