@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, within } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import App, { ROOM_SESSION_KEY } from './App'
@@ -110,35 +110,6 @@ function createRoom(overrides: Partial<RoomState> = {}): RoomState {
     ],
     ...overrides,
   }
-}
-
-function createHostRoom(
-  playerOverrides: Partial<RoomState['players'][number]> = {},
-  roomOverrides: Partial<RoomState> = {},
-): RoomState {
-  const room = createRoom(roomOverrides)
-
-  return {
-    ...room,
-    players: [
-      {
-        ...room.players[0],
-        ...playerOverrides,
-      },
-      room.players[1],
-    ],
-  }
-}
-
-function getPanelByText(pattern: RegExp): HTMLElement {
-  const source = screen.getByText(pattern)
-  const panel = source.closest('.panel')
-
-  if (panel === null) {
-    throw new Error(`Unable to find panel for ${pattern.toString()}`)
-  }
-
-  return panel as HTMLElement
 }
 
 function emitMessage(message: unknown): void {
