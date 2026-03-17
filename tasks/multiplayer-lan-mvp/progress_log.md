@@ -44,6 +44,22 @@ Transitioning the project from a single-player roguelike loop into a 2-player LA
 - **Decisions / Notes:** Kept the authoritative simulation on the server, used the Vite dev server as the shareable LAN URL with `/ws` proxying to the Node WebSocket server, and kept factions cosmetic-only while preserving carryover money, inventory, and reputation.
 - **Next Step:** Manual LAN verification across two laptops and player feedback on pacing, balance, and reconnect behavior.
 
+### 2026-03-16 22:36:03 PDT - Customer stand-selection investigation
+
+- **Status:** Completed
+- **Work Completed:** Reviewed the multiplayer task artifacts, traced the customer selection path in `src/game/engine.ts`, and analyzed how `generateCustomerBudget`, `calculateStandScore`, and `chooseWinner` interact during the shared simulation. Confirmed that customers currently choose the single highest-scoring stand deterministically unless the scores are exactly tied, which explains the observed one-stand clustering when one player has even a small edge.
+- **Validation:** Reviewed `src/game/engine.ts`, `src/game/engine.test.ts`, and `src/game/balance.ts`. Ran targeted `npx tsx` simulation probes to compare equal-stand scenarios against small-advantage scenarios. Observed that equal stands split customers across seeds, while a `+$0.05` price advantage or `+2` reputation advantage caused the advantaged stand to win all contested customers until inventory depletion.
+- **Decisions / Notes:** Improvement options to consider next are: probabilistic winner selection weighted by relative stand score, explicit exploration noise added per customer before winner selection, or a mixed model where some customers have stand loyalty / idiosyncratic preference layered on top of the existing shared scoring formula.
+- **Next Step:** Align on the preferred balancing direction, then implement it test-first and provide manual gameplay checks focused on customer distribution fairness.
+
+### 2026-03-16 23:06:59 PDT - Weighted customer stand selection implemented
+
+- **Status:** Completed
+- **Work Completed:** Replaced deterministic highest-score winner selection with a weighted lottery based on each stand's computed score, keeping the simulation server-authoritative and seed-deterministic while allowing near-equal stands to split customers more naturally. Added an engine test that checks aggregate behavior for a slight stand advantage under controlled conditions, documented the future segmented-customer mechanic idea in `ideas/mechanics.md`, added the follow-on concept for a purchasable customer-preference tooltip plus persistent customer profiles, and updated `AGENTS.md` so future ideas are captured in `ideas/`.
+- **Validation:** `npx vitest run src/game/engine.test.ts`, `npm run test:run`, and `npm run build`
+- **Decisions / Notes:** The current fix intentionally keeps the existing score formula and only changes how scores are converted into stand choice. This is the lowest-risk balance improvement and leaves room for future customer segment mechanics on top of the weighted selector.
+- **Next Step:** Run manual multiplayer gameplay checks to confirm customer flow now looks less binary in real play, then decide whether score weighting needs tuning after hands-on testing.
+
 ## Validation
 
 - `git status --short`

@@ -484,19 +484,25 @@ function chooseWinner(
       balance,
     ),
   }))
-  const winningScore = Math.max(...scoredPlayers.map((entry) => entry.score))
+  const totalScore = scoredPlayers.reduce((sum, entry) => sum + entry.score, 0)
 
-  if (winningScore <= 0) {
+  if (totalScore <= 0) {
     return [null, room]
   }
 
-  const finalists = scoredPlayers.filter((entry) => entry.score === winningScore)
-  if (finalists.length === 1) {
-    return [finalists[0].playerId, room]
+  const [roll, rng] = nextFloat(room.rng)
+  const winningThreshold = roll * totalScore
+  let cumulativeScore = 0
+
+  for (const entry of scoredPlayers) {
+    cumulativeScore += entry.score
+    if (winningThreshold < cumulativeScore) {
+      return [entry.playerId, { ...room, rng }]
+    }
   }
 
-  const [winnerIndex, rng] = nextInt(room.rng, finalists.length)
-  return [finalists[winnerIndex].playerId, { ...room, rng }]
+  const fallbackWinner = scoredPlayers.findLast((entry) => entry.score > 0)
+  return [fallbackWinner?.playerId ?? null, { ...room, rng }]
 }
 
 function satisfactionScore(recipeFit: number, price: number, willingnessToPay: number): number {

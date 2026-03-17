@@ -30,6 +30,11 @@
 - Existing task continuation: locate the relevant task folder and continue updating its `progress_log.md`.
 - Use the task directory as the canonical home for task-specific artifacts.
 
+## Ideas Directory
+
+- When future gameplay, UX, or technical extension ideas come up during work, write them down in `ideas/` instead of leaving them only in chat.
+- Prefer focused Markdown files by theme so ideas stay easy to revisit and expand later.
+
 ## UI & Style Guidelines
 
 - Whenever modifying the user interface or generating new visual assets, consult `docs/STYLE.md` to ensure aesthetic consistency with the project's requirements.

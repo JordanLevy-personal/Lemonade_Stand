@@ -206,6 +206,63 @@ describe('multiplayer engine', () => {
     )
   })
 
+  it('lets a slight stand advantage win more often without taking every customer', () => {
+    const deterministicSunnyBalance = {
+      ...defaultBalanceConfig,
+      weatherProfiles: {
+        ...defaultBalanceConfig.weatherProfiles,
+        sunny: {
+          ...defaultBalanceConfig.weatherProfiles.sunny,
+          customerCount: 200,
+          baseWillingnessToPay: 3,
+          willingnessVariance: 0,
+        },
+      },
+    }
+    let hostSales = 0
+    let guestSales = 0
+
+    for (let seed = 1; seed <= 40; seed += 1) {
+      let room: RoomState = createPlanningRoom(seed)
+      room = {
+        ...room,
+        weather: 'sunny',
+        marketBasePrices: {
+          lemons: 0.3,
+          sugar: 0.2,
+          ice: 0.1,
+        },
+      }
+      room = updatePlayerPlan(room, 'player-host', {
+        price: 1.45,
+        recipe: {
+          lemons: 0,
+          sugar: 0,
+          ice: 0,
+        },
+      })
+      room = updatePlayerPlan(room, 'player-guest', {
+        price: 1.5,
+        recipe: {
+          lemons: 0,
+          sugar: 0,
+          ice: 0,
+        },
+      })
+      room = setPlayerReady(setPlayerReady(room, 'player-host', true), 'player-guest', true)
+
+      const simulated = startSimulation(room, {}, deterministicSunnyBalance)
+      const host = simulated.players.find((player) => player.id === 'player-host')
+      const guest = simulated.players.find((player) => player.id === 'player-guest')
+
+      hostSales += host?.dailyResults.cupsSold ?? 0
+      guestSales += guest?.dailyResults.cupsSold ?? 0
+    }
+
+    expect(hostSales).toBeGreaterThan(guestSales)
+    expect(guestSales).toBeGreaterThan(0)
+  })
+
   it('prevents overselling when a winning stand runs out of inventory', () => {
     let room = createPlanningRoom(5)
     room = updatePlayerPlan(room, 'player-host', {
