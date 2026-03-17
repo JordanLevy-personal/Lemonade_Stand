@@ -1,0 +1,56 @@
+name: Deploy To VPS
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/deploy-vps.yml"
+      - "deploy/**"
+      - "index.html"
+      - "package.json"
+      - "package-lock.json"
+      - "public/**"
+      - "server/**"
+      - "src/**"
+      - "tsconfig.json"
+      - "tsconfig.app.json"
+      - "tsconfig.node.json"
+      - "vite.config.ts"
+  workflow_dispatch:
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Deploy Production Build
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      DEPLOY_PATH: ${{ vars.VPS_DEPLOY_PATH || '/var/www/roguelike-lemonade-stand' }}
+      SSH_PORT: ${{ vars.VPS_SSH_PORT || '22' }}
+      SYSTEMD_SERVICE: ${{ vars.VPS_SYSTEMD_SERVICE || 'roguelike-lemonade-stand.service' }}
+    steps:
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1.2.2
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ env.SSH_PORT }}
+          script_stop: true
+          envs: DEPLOY_PATH,SYSTEMD_SERVICE
+          script: |
+            set -euo pipefail
+
+            cd "$DEPLOY_PATH"
+            git fetch --prune origin
+            git checkout main
+            git pull --ff-only origin main
+            npm ci
+            npm run build
+            sudo systemctl restart "$SYSTEMD_SERVICE"
+            sudo systemctl reload nginx
+            curl --fail http://127.0.0.1:3001/health

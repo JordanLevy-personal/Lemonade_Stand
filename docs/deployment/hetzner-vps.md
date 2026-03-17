@@ -198,6 +198,51 @@ sudo systemctl restart roguelike-lemonade-stand.service
 sudo systemctl reload nginx
 ```
 
+## GitHub Action Deploys
+
+The repo includes a GitHub Actions workflow at `.github/workflows/deploy-vps.yml` that can deploy automatically after pushes to `main`, or manually with `workflow_dispatch`.
+
+### GitHub repository setup
+
+Add these repository secrets:
+
+- `VPS_HOST`: public hostname or IP of the VPS
+- `VPS_USER`: SSH user that owns the deploy checkout
+- `VPS_SSH_KEY`: private SSH key for that user
+
+Add these repository variables if you need to override the defaults:
+
+- `VPS_DEPLOY_PATH`: defaults to `/var/www/roguelike-lemonade-stand`
+- `VPS_SYSTEMD_SERVICE`: defaults to `roguelike-lemonade-stand.service`
+- `VPS_SSH_PORT`: defaults to `22`
+
+### VPS prerequisites for GitHub deploys
+
+- The VPS user must already be able to SSH in with the configured key.
+- That user must be able to run `sudo systemctl restart roguelike-lemonade-stand.service` and `sudo systemctl reload nginx`.
+- The repo checkout at `/var/www/roguelike-lemonade-stand` must already exist on the VPS.
+- The checkout must be able to `git pull origin main` non-interactively.
+
+If the repo is private, configure deploy credentials on the VPS before relying on the GitHub Action.
+
+### What the workflow does
+
+On deploy, the workflow SSHes into the VPS and runs:
+
+```bash
+cd /var/www/roguelike-lemonade-stand
+git fetch --prune origin
+git checkout main
+git pull --ff-only origin main
+npm ci
+npm run build
+sudo systemctl restart roguelike-lemonade-stand.service
+sudo systemctl reload nginx
+curl --fail http://127.0.0.1:3001/health
+```
+
+The health check is the last step so the workflow fails if the backend does not come back up cleanly.
+
 ## Troubleshooting
 
 Backend logs:
