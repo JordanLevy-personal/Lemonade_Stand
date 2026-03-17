@@ -36,6 +36,14 @@ Deployment workstream created for preparing the multiplayer game for a first pro
 - **Decisions / Notes:** Keeping the first release on host-managed Nginx plus systemd is still the best fit for this repo. The template now makes the deploy-user requirement explicit to avoid permissions issues on the VPS.
 - **Next Step:** Walk through the VPS setup with the user and apply the domain-specific values.
 
+### 2026-03-16 23:44:49 PDT - Lockfile install issue resolved
+
+- **Status:** Completed
+- **Work Completed:** Investigated the VPS `npm ci` failure, confirmed the repo was ignoring `package-lock.json`, removed that ignore rule, and updated the deployment guide with a one-time `npm install` fallback for checkouts that do not yet include the lockfile.
+- **Validation:** Ran `npm run build` successfully and `npm run test:run` successfully after the documentation and ignore-rule updates.
+- **Decisions / Notes:** Fresh deployments should use `npm ci` once the lockfile is committed and pulled. Existing stale server checkouts can be unblocked immediately with `npm install`.
+- **Next Step:** Continue the VPS setup with the user using the immediate `npm install` workaround, then later sync the tracked lockfile into the deployment flow.
+
 ## Validation
 
 - `sed -n '1,260p' /Users/jordanlevy/.codex/skills/new-task/SKILL.md`

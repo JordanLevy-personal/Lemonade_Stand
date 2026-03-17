@@ -47,6 +47,15 @@ npm ci
 npm run build
 ```
 
+If `npm ci` fails because your checkout does not include `package-lock.json`, run this once instead:
+
+```bash
+npm install
+npm run build
+```
+
+After the lockfile is committed to the repo and pulled onto the server, switch back to `npm ci` for repeatable installs.
+
 ## 3. Configure the systemd service
 
 Copy the service template:
