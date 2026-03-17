@@ -3,6 +3,8 @@ import { nextFloat, nextInt, normalizeSeed } from './rng'
 import type {
   BalanceConfig,
   CustomerEvent,
+  CustomerProfile,
+  CustomerStandHistory,
   DailyPlan,
   FactionDefinition,
   Inventory,
@@ -143,6 +145,39 @@ function weatherOrder(): Weather[] {
   return ['sunny', 'hot', 'cloudy', 'raining']
 }
 
+function maximumCustomerCount(balance: BalanceConfig): number {
+  return Math.max(...Object.values(balance.weatherProfiles).map((profile) => profile.customerCount))
+}
+
+function rollTasteOffset(room: RoomState): [number, RoomState] {
+  const [offsetIndex, rng] = nextInt(room.rng, 5)
+  return [offsetIndex - 2, { ...room, rng }]
+}
+
+function createCustomerRoster(
+  room: RoomState,
+  balance: BalanceConfig,
+): [CustomerProfile[], RoomState] {
+  const rosterSize = maximumCustomerCount(balance)
+  const roster: CustomerProfile[] = []
+  let nextRoom = room
+
+  for (let customerIndex = 0; customerIndex < rosterSize; customerIndex += 1) {
+    const [lemons, lemonsRoom] = rollTasteOffset(nextRoom)
+    const [sugar, sugarRoom] = rollTasteOffset(lemonsRoom)
+    const [ice, iceRoom] = rollTasteOffset(sugarRoom)
+
+    roster.push({
+      id: `customer-${customerIndex}`,
+      tasteOffsets: { lemons, sugar, ice },
+      standHistory: {},
+    })
+    nextRoom = iceRoom
+  }
+
+  return [roster, nextRoom]
+}
+
 function randomJitter(seed: number, amplitude: number): number {
   return Number((Math.sin(seed * 12.9898) * amplitude).toFixed(3))
 }
@@ -217,7 +252,7 @@ export function createRoom(
   },
   balance: BalanceConfig = defaultBalanceConfig,
 ): RoomState {
-  return {
+  const baseRoom: RoomState = {
     version: 2,
     roomId: input.roomId,
     hostPlayerId: input.hostPlayerId,
@@ -239,10 +274,17 @@ export function createRoom(
     ],
     marketBasePrices: null,
     simulation: null,
+    customerRoster: [],
     maxPlayers: balance.maxPlayers,
     rng: {
       seed: normalizeSeed(input.seed ?? Date.now()),
     },
+  }
+
+  const [customerRoster, roomWithRosterRng] = createCustomerRoster(baseRoom, balance)
+  return {
+    ...roomWithRosterRng,
+    customerRoster,
   }
 }
 
@@ -371,6 +413,75 @@ export function calculateRecipeFit(
   )
 }
 
+function preferredRecipeForCustomer(
+  customer: CustomerProfile,
+  weather: Weather,
+  balance: BalanceConfig,
+): Recipe {
+  const idealRecipe = balance.weatherProfiles[weather].idealRecipe
+
+  return sanitizeRecipe({
+    lemons: idealRecipe.lemons + customer.tasteOffsets.lemons,
+    sugar: idealRecipe.sugar + customer.tasteOffsets.sugar,
+    ice: idealRecipe.ice + customer.tasteOffsets.ice,
+  })
+}
+
+function calculatePreferredRecipeFit(recipe: Recipe, preferredRecipe: Recipe): number {
+  const ingredientFit = [
+    1 - Math.abs(recipe.lemons - preferredRecipe.lemons) / 5,
+    1 - Math.abs(recipe.sugar - preferredRecipe.sugar) / 5,
+    1 - Math.abs(recipe.ice - preferredRecipe.ice) / 5,
+  ]
+
+  return clamp(
+    ingredientFit.reduce((sum, value) => sum + value, 0) / ingredientFit.length,
+    0,
+    1,
+  )
+}
+
+function historyBonus(history: CustomerStandHistory | undefined, currentDay: number): number {
+  if (history === undefined) {
+    return 0
+  }
+
+  const recencyGap = Math.max(0, currentDay - history.lastDaySeen)
+  const recencyMultiplier = clamp(1 - recencyGap * 0.25, 0, 1)
+  const purchasePull = clamp(history.purchases / 3, 0, 1)
+  const satisfactionPull = clamp(history.rollingAverageSatisfaction, 0, 1)
+
+  return Number((recencyMultiplier * (purchasePull * 0.08 + satisfactionPull * 0.16)).toFixed(4))
+}
+
+function shuffleCustomerRoster(
+  room: RoomState,
+  customerRoster: CustomerProfile[],
+): [CustomerProfile[], RoomState] {
+  const shuffledRoster = [...customerRoster]
+  let nextRoom = room
+
+  for (let index = shuffledRoster.length - 1; index > 0; index -= 1) {
+    const [swapIndex, rng] = nextInt(nextRoom.rng, index + 1)
+    ;[shuffledRoster[index], shuffledRoster[swapIndex]] = [shuffledRoster[swapIndex], shuffledRoster[index]]
+    nextRoom = {
+      ...nextRoom,
+      rng,
+    }
+  }
+
+  return [shuffledRoster, nextRoom]
+}
+
+function sampleCustomersForDay(
+  room: RoomState,
+  weather: Weather,
+  balance: BalanceConfig,
+): [CustomerProfile[], RoomState] {
+  const [shuffledRoster, shuffledRoom] = shuffleCustomerRoster(room, room.customerRoster)
+  return [shuffledRoster.slice(0, customerCountForWeather(weather, balance)), shuffledRoom]
+}
+
 function priceScore(price: number, willingnessToPay: number): number {
   if (price > willingnessToPay) {
     return 0
@@ -491,23 +602,33 @@ function generateCustomerBudget(
 
 function chooseWinner(
   room: RoomState,
+  customer: CustomerProfile,
   willingnessToPay: number,
   weather: Weather,
   balance: BalanceConfig,
 ): [string | null, RoomState] {
-  const scoredPlayers = room.players.map((player) => ({
-    playerId: player.id,
-    score: calculateStandScore(
-      {
-        willingnessToPay,
-        recipe: player.dailyPlan.recipe,
-        price: player.dailyPlan.price,
-        reputation: player.reputation,
-      },
-      weather,
-      balance,
-    ),
-  }))
+  const preferredRecipe = preferredRecipeForCustomer(customer, weather, balance)
+  const scoredPlayers = room.players.map((player) => {
+    const priced = priceScore(player.dailyPlan.price, willingnessToPay)
+    if (priced === 0) {
+      return {
+        playerId: player.id,
+        score: 0,
+      }
+    }
+
+    return {
+      playerId: player.id,
+      score: Number(
+        (
+          priced * 0.4 +
+          calculatePreferredRecipeFit(player.dailyPlan.recipe, preferredRecipe) * 0.35 +
+          clamp(player.reputation / 100, 0, 1) * 0.1 +
+          historyBonus(customer.standHistory[player.id], room.day)
+        ).toFixed(4),
+      ),
+    }
+  })
   const totalScore = scoredPlayers.reduce((sum, entry) => sum + entry.score, 0)
 
   if (totalScore <= 0) {
@@ -539,6 +660,48 @@ export function calculateSatisfactionScore(
       curveScore(recipeFit) * 0.7 + curveScore(priceScore(price, willingnessToPay)) * 0.3
     ).toFixed(4),
   )
+}
+
+function updateCustomerHistory(
+  room: RoomState,
+  customerId: string,
+  playerId: string,
+  day: number,
+  satisfaction: number | null,
+): RoomState {
+  return {
+    ...room,
+    customerRoster: room.customerRoster.map((customer) => {
+      if (customer.id !== customerId) {
+        return customer
+      }
+
+      const previousHistory = customer.standHistory[playerId]
+      const purchases = previousHistory?.purchases ?? 0
+      const nextPurchases = satisfaction === null ? purchases : purchases + 1
+      const nextAverageSatisfaction =
+        satisfaction === null
+          ? previousHistory?.rollingAverageSatisfaction ?? 0
+          : Number(
+              (
+                ((previousHistory?.rollingAverageSatisfaction ?? 0) * purchases + satisfaction) /
+                Math.max(1, nextPurchases)
+              ).toFixed(4),
+            )
+
+      return {
+        ...customer,
+        standHistory: {
+          ...customer.standHistory,
+          [playerId]: {
+            purchases: nextPurchases,
+            lastDaySeen: day,
+            rollingAverageSatisfaction: nextAverageSatisfaction,
+          },
+        },
+      }
+    }),
+  }
 }
 
 function finalizePlayers(room: RoomState, satisfactionTotals: Map<string, number>, balance: BalanceConfig): PlayerState[] {
@@ -604,7 +767,9 @@ export function startSimulation(
     players: room.players.map((player) => applyPurchases(player, room.marketBasePrices!)),
   }
 
-  const totalCustomers = customerCountForWeather(room.weather, balance)
+  const [customersForDay, sampledRoom] = sampleCustomersForDay(nextRoom, room.weather, balance)
+  nextRoom = sampledRoom
+  const totalCustomers = customersForDay.length
   const events: CustomerEvent[] = []
   const satisfactionTotals = new Map<string, number>()
 
@@ -613,9 +778,16 @@ export function startSimulation(
   })
 
   for (let customerIndex = 0; customerIndex < totalCustomers; customerIndex += 1) {
+    const customer = customersForDay[customerIndex]
     const [willingnessToPay, budgetRoom] = generateCustomerBudget(nextRoom, room.weather, balance)
     nextRoom = budgetRoom
-    const [winnerId, winnerRoom] = chooseWinner(nextRoom, willingnessToPay, room.weather, balance)
+    const [winnerId, winnerRoom] = chooseWinner(
+      nextRoom,
+      customer,
+      willingnessToPay,
+      room.weather,
+      balance,
+    )
     nextRoom = winnerRoom
     const timing = eventTimings(customerIndex, totalCustomers, durationMs)
 
@@ -632,6 +804,7 @@ export function startSimulation(
       }
       events.push({
         id: `customer-${customerIndex}`,
+        customerId: customer.id,
         customerIndex,
         spawnAt: timing.spawnAt,
         resolveAt: timing.resolveAt,
@@ -670,8 +843,10 @@ export function startSimulation(
               },
         ),
       }
+      nextRoom = updateCustomerHistory(nextRoom, customer.id, winnerId, room.day, null)
       events.push({
         id: `customer-${customerIndex}`,
+        customerId: customer.id,
         customerIndex,
         spawnAt: timing.spawnAt,
         resolveAt: timing.resolveAt,
@@ -686,8 +861,10 @@ export function startSimulation(
       })
       continue
     }
-
-    const recipeFit = calculateRecipeFit(chosenPlayer.dailyPlan.recipe, room.weather, balance)
+    const recipeFit = calculatePreferredRecipeFit(
+      chosenPlayer.dailyPlan.recipe,
+      preferredRecipeForCustomer(customer, room.weather, balance),
+    )
     const satisfaction = calculateSatisfactionScore(
       recipeFit,
       chosenPlayer.dailyPlan.price,
@@ -719,9 +896,11 @@ export function startSimulation(
             },
       ),
     }
+    nextRoom = updateCustomerHistory(nextRoom, customer.id, winnerId, room.day, satisfaction)
 
     events.push({
       id: `customer-${customerIndex}`,
+      customerId: customer.id,
       customerIndex,
       spawnAt: timing.spawnAt,
       resolveAt: timing.resolveAt,

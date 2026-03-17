@@ -57,6 +57,7 @@ export interface PlayerState {
 
 export interface CustomerEvent {
   id: string
+  customerId: string
   customerIndex: number
   spawnAt: number
   resolveAt: number
@@ -76,6 +77,24 @@ export interface RoomSimulation {
   totalCustomers: number
 }
 
+export interface CustomerTasteOffsets {
+  lemons: number
+  sugar: number
+  ice: number
+}
+
+export interface CustomerStandHistory {
+  purchases: number
+  lastDaySeen: number
+  rollingAverageSatisfaction: number
+}
+
+export interface CustomerProfile {
+  id: string
+  tasteOffsets: CustomerTasteOffsets
+  standHistory: Record<string, CustomerStandHistory>
+}
+
 export interface RngState {
   seed: number
 }
@@ -91,6 +110,7 @@ export interface RoomState {
   players: PlayerState[]
   marketBasePrices: Inventory | null
   simulation: RoomSimulation | null
+  customerRoster: CustomerProfile[]
   maxPlayers: number
   rng: RngState
 }

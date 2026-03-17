@@ -48,3 +48,27 @@ If we add the insight upgrade, customers should become persistent entities with 
 - Keep segment count small, likely `3-4`.
 - Make the segment effect visible only through outcomes first; UI explanation can come later.
 - Preserve deterministic server authority by generating segments from the room RNG.
+
+## Flavor Variants And Area Demand
+
+### Summary
+
+Add named lemonade variants later, then let neighborhoods or runs have different demand pockets so not every flavor is universally good.
+
+### Candidate directions
+
+- `Named flavors`: strawberry, cherry, blueberry, and other variants that layer on top of the base lemon/sugar/ice recipe.
+- `Area preferences`: some locations or customer groups strongly prefer one flavor while others treat it as niche.
+- `Premium pricing`: specialty flavors can justify higher prices when demand is present, but create waste risk when the area is cold on that flavor.
+
+### Why this could help
+
+- Makes product choice feel more expressive than only tuning the base mix.
+- Creates a more interesting risk-reward decision around niche demand and premium pricing.
+- Pairs naturally with future customer insight tooling and persistent-profile systems.
+
+### Guardrails
+
+- Keep this out of the first persistent-profile implementation.
+- Introduce flavors only after the current recipe-axis preference model feels good.
+- Make area demand legible before adding a large flavor catalog.
