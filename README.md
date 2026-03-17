@@ -9,6 +9,11 @@ A browser-based roguelike business sim where each day is a lemonade-stand manage
 - Vite
 - Vitest + React Testing Library
 
+## Runtime Requirements
+
+- Node.js 22.12+ recommended
+- npm 10+ recommended
+
 ## Scripts
 
 - `npm install`

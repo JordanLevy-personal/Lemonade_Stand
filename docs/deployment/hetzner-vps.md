@@ -20,21 +20,28 @@ This matches the client connection behavior in [`src/client/socket.ts`](/Users/j
 - Ubuntu 24.04 or similar on Hetzner
 - Your code lives at `/var/www/roguelike-lemonade-stand`
 - Your domain is managed in Cloudflare
-- Node.js and npm are installed from standard system packages or NodeSource so `node` and `npm` are available under `/usr/bin`
+- Node.js 22.12+ and npm 10+ are installed so `node` and `npm` are available under `/usr/bin`
 
 ## 1. Install system packages
 
 ```bash
 sudo apt update
-sudo apt install -y nginx git ufw certbot python3-certbot-nginx
+sudo apt install -y nginx git ufw certbot python3-certbot-nginx ca-certificates curl gnupg
 ```
 
-Install Node.js LTS if it is not already present, then confirm:
+Install Node.js 22 from NodeSource, then confirm:
 
 ```bash
+sudo mkdir -p /etc/apt/keyrings
+curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | sudo gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg
+echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main" | sudo tee /etc/apt/sources.list.d/nodesource.list
+sudo apt update
+sudo apt install -y nodejs
 node -v
 npm -v
 ```
+
+If `node -v` reports anything below `v22.12.0`, stop and upgrade Node before trying to install project dependencies.
 
 ## 2. Clone the repo and build the app
 

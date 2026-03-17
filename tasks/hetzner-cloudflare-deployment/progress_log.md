@@ -44,6 +44,14 @@ Deployment workstream created for preparing the multiplayer game for a first pro
 - **Decisions / Notes:** Fresh deployments should use `npm ci` once the lockfile is committed and pulled. Existing stale server checkouts can be unblocked immediately with `npm install`.
 - **Next Step:** Continue the VPS setup with the user using the immediate `npm install` workaround, then later sync the tracked lockfile into the deployment flow.
 
+### 2026-03-16 23:49:18 PDT - Node runtime requirement documented
+
+- **Status:** Completed
+- **Work Completed:** Investigated the VPS build failure on Node 18, added an explicit Node/npm engine requirement to the project, added an `.nvmrc`, and updated the README and deployment guide to require Node 22.12+ before dependency installation and builds.
+- **Validation:** Ran `npm run build` successfully and `npm run test:run` successfully after the runtime requirement updates.
+- **Decisions / Notes:** Standardizing on Node 22 keeps deployment simpler than allowing multiple major versions and matches the current Vite toolchain requirements shown by the server logs.
+- **Next Step:** Have the user upgrade Node on the VPS, reinstall dependencies, and continue the deployment setup.
+
 ## Validation
 
 - `sed -n '1,260p' /Users/jordanlevy/.codex/skills/new-task/SKILL.md`
