@@ -91,6 +91,7 @@ function toGameRoom(room: RoomState): GameRoomState {
         : {
             events: room.simulation.customerEvents.map((event, index) => ({
               id: event.id,
+              customerId: event.id,
               customerIndex: index,
               spawnAt: event.arrivalOffsetMs,
               resolveAt: event.arrivalOffsetMs + 1_500,
@@ -106,9 +107,10 @@ function toGameRoom(room: RoomState): GameRoomState {
             durationMs: room.simulation.durationMs,
             totalCustomers: room.simulation.customerEvents.length,
           },
+    customerRoster: room.customerRoster ?? [],
     maxPlayers: 2,
     rng: {
-      seed: Math.max(1, room.day * 7_919),
+      seed: room.rngSeed ?? Math.max(1, room.day * 7_919),
     },
   }
 }
@@ -155,6 +157,8 @@ function toServerRoom(gameRoom: GameRoomState): RoomState {
           },
     pausedFromPhase: gameRoom.pausedPhase,
     requestedNextDayPlayerIds: [],
+    customerRoster: gameRoom.customerRoster,
+    rngSeed: gameRoom.rng.seed,
   }
 }
 

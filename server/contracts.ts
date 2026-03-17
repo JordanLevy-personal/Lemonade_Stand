@@ -1,3 +1,5 @@
+import type { CustomerProfile } from '../src/game/types'
+
 export type RoomPhase = 'lobby' | 'planning' | 'simulating' | 'results' | 'paused'
 
 export type ConnectionStatus = 'connected' | 'disconnected'
@@ -83,6 +85,8 @@ export interface RoomState {
   simulation: RoomSimulation | null
   pausedFromPhase: Exclude<RoomPhase, 'paused'> | null
   requestedNextDayPlayerIds: string[]
+  customerRoster?: CustomerProfile[]
+  rngSeed?: number
 }
 
 export interface CreateRoomMessage {
