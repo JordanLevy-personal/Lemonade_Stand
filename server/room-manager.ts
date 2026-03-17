@@ -1,0 +1,338 @@
+import type {
+  DailyPlan,
+  FactionSelection,
+  MarketBasePrices,
+  PlayerState,
+  RoomPhase,
+  RoomState,
+  Weather,
+} from './contracts'
+
+export interface RoomGameHooks {
+  createDay: (day: number) => {
+    weather: Weather
+    marketBasePrices: MarketBasePrices
+  }
+  startSimulation: (room: RoomState, simulationStartAt: number) => RoomState
+  startNextDay: (room: RoomState) => RoomState
+  createPlayerDefaults: () => Pick<PlayerState, 'money' | 'inventory' | 'reputation'>
+}
+
+interface CreateRoomInput {
+  roomId: string
+  playerId: string
+  name: string
+  faction: FactionSelection
+}
+
+interface JoinRoomInput {
+  roomId: string
+  playerId?: string
+  name: string
+  faction: FactionSelection
+}
+
+interface SubmitPlanInput {
+  roomId: string
+  playerId: string
+  plan: DailyPlan
+}
+
+interface RequestNextDayInput {
+  roomId: string
+  playerId: string
+}
+
+interface DisconnectInput {
+  roomId: string
+  playerId: string
+}
+
+export interface RoomMutationResult {
+  room: RoomState
+  simulationStartedAt: number | null
+}
+
+function activePhase(room: RoomState): Exclude<RoomPhase, 'paused'> {
+  return room.phase === 'paused' ? room.pausedFromPhase ?? 'planning' : room.phase
+}
+
+function allPlayersConnected(room: RoomState): boolean {
+  return room.players.every((player) => player.connectionStatus === 'connected')
+}
+
+function readyPlayers(room: RoomState): number {
+  return room.players.filter((player) => player.hasSubmittedPlan).length
+}
+
+function reconnectExistingPlayer(
+  room: RoomState,
+  playerId: string,
+  input: Pick<JoinRoomInput, 'name' | 'faction'>,
+): RoomState {
+  const reconnected: RoomState = {
+    ...room,
+    players: room.players.map((player) =>
+      player.id === playerId
+        ? {
+            ...player,
+            name: input.name,
+            faction: input.faction,
+            connectionStatus: 'connected' as const,
+          }
+        : player,
+    ),
+  }
+
+  return reconnected.phase === 'paused' && allPlayersConnected(reconnected)
+    ? {
+        ...reconnected,
+        phase: reconnected.pausedFromPhase ?? 'planning',
+        pausedFromPhase: null,
+      }
+    : reconnected
+}
+
+function planningPhase(room: RoomState): RoomState {
+  if (room.players.length < 2) {
+    return {
+      ...room,
+      phase: 'lobby',
+    }
+  }
+
+  if (room.phase === 'paused') {
+    return room
+  }
+
+  return {
+    ...room,
+    phase: 'planning',
+  }
+}
+
+export class RoomManager {
+  private readonly rooms = new Map<string, RoomState>()
+  private readonly hooks: RoomGameHooks
+  private readonly getNow: () => number
+
+  constructor(hooks: RoomGameHooks, getNow: () => number = () => Date.now()) {
+    this.hooks = hooks
+    this.getNow = getNow
+  }
+
+  getRoom(roomId: string): RoomState | null {
+    return this.rooms.get(roomId) ?? null
+  }
+
+  createRoom(input: CreateRoomInput): RoomState {
+    const { weather, marketBasePrices } = this.hooks.createDay(1)
+    const defaults = this.hooks.createPlayerDefaults()
+    const room: RoomState = {
+      roomId: input.roomId,
+      hostPlayerId: input.playerId,
+      day: 1,
+      weather,
+      phase: 'lobby',
+      players: [
+        {
+          id: input.playerId,
+          name: input.name,
+          faction: input.faction,
+          dailyPlan: null,
+          dailyResults: null,
+          hasSubmittedPlan: false,
+          connectionStatus: 'connected',
+          ...defaults,
+        },
+      ],
+      marketBasePrices,
+      simulation: null,
+      pausedFromPhase: null,
+      requestedNextDayPlayerIds: [],
+    }
+
+    this.rooms.set(room.roomId, room)
+    return room
+  }
+
+  joinRoom(input: JoinRoomInput): RoomState {
+    const room = this.requireRoom(input.roomId)
+    const existingPlayer =
+      input.playerId === undefined
+        ? null
+        : room.players.find((player) => player.id === input.playerId) ?? null
+
+    const matchingDisconnectedPlayer =
+      input.playerId === undefined
+        ? room.players.find(
+            (player) =>
+              player.connectionStatus === 'disconnected' &&
+              player.name === input.name &&
+              player.faction.id === input.faction.id,
+          ) ?? null
+        : null
+
+    if (existingPlayer !== null) {
+      if (existingPlayer.connectionStatus === 'connected') {
+        throw new Error('That player is already connected.')
+      }
+
+      const resumed = reconnectExistingPlayer(room, existingPlayer.id, input)
+
+      this.rooms.set(input.roomId, resumed)
+      return resumed
+    }
+
+    if (matchingDisconnectedPlayer !== null) {
+      const resumed = reconnectExistingPlayer(room, matchingDisconnectedPlayer.id, input)
+      this.rooms.set(input.roomId, resumed)
+      return resumed
+    }
+
+    if (room.players.length >= 2) {
+      throw new Error('That room is already full.')
+    }
+
+    const defaults = this.hooks.createPlayerDefaults()
+    const joinedRoom = planningPhase({
+      ...room,
+      players: [
+        ...room.players,
+        {
+          id: this.generateJoinPlayerId(room),
+          name: input.name,
+          faction: input.faction,
+          dailyPlan: null,
+          dailyResults: null,
+          hasSubmittedPlan: false,
+          connectionStatus: 'connected',
+          ...defaults,
+        },
+      ],
+    })
+
+    this.rooms.set(input.roomId, joinedRoom)
+    return joinedRoom
+  }
+
+  submitPlan(input: SubmitPlanInput): RoomMutationResult {
+    const room = this.requireRoom(input.roomId)
+
+    if (activePhase(room) !== 'planning') {
+      throw new Error('Plans can only be submitted during planning.')
+    }
+
+    const updatedRoom: RoomState = {
+      ...room,
+      phase: room.phase === 'paused' ? 'paused' : 'planning',
+      requestedNextDayPlayerIds: [],
+      players: room.players.map((player) =>
+        player.id === input.playerId
+          ? {
+              ...player,
+              dailyPlan: input.plan,
+              hasSubmittedPlan: true,
+            }
+          : player,
+      ),
+    }
+
+    if (readyPlayers(updatedRoom) < 2 || updatedRoom.players.length < 2 || updatedRoom.phase === 'paused') {
+      this.rooms.set(updatedRoom.roomId, updatedRoom)
+      return {
+        room: updatedRoom,
+        simulationStartedAt: null,
+      }
+    }
+
+    const simulationStartedAt = this.getNow() + 1_000
+    const simulatedRoom = this.hooks.startSimulation(updatedRoom, simulationStartedAt)
+
+    this.rooms.set(simulatedRoom.roomId, simulatedRoom)
+    return {
+      room: simulatedRoom,
+      simulationStartedAt,
+    }
+  }
+
+  requestNextDay(input: RequestNextDayInput): RoomState {
+    const room = this.requireRoom(input.roomId)
+
+    if (activePhase(room) !== 'results') {
+      throw new Error('The next day can only be requested from results.')
+    }
+
+    const requestedNextDayPlayerIds = room.requestedNextDayPlayerIds.includes(input.playerId)
+      ? room.requestedNextDayPlayerIds
+      : [...room.requestedNextDayPlayerIds, input.playerId]
+
+    if (requestedNextDayPlayerIds.length < 2) {
+      const updatedRoom = {
+        ...room,
+        requestedNextDayPlayerIds,
+      }
+      this.rooms.set(updatedRoom.roomId, updatedRoom)
+      return updatedRoom
+    }
+
+    const nextDayRoom = this.hooks.startNextDay({
+      ...room,
+      requestedNextDayPlayerIds,
+    })
+    this.rooms.set(nextDayRoom.roomId, nextDayRoom)
+    return nextDayRoom
+  }
+
+  completeSimulation(roomId: string): RoomState {
+    const room = this.requireRoom(roomId)
+
+    if (room.phase !== 'simulating') {
+      return room
+    }
+
+    const resultsRoom: RoomState = {
+      ...room,
+      phase: 'results',
+    }
+
+    this.rooms.set(resultsRoom.roomId, resultsRoom)
+    return resultsRoom
+  }
+
+  disconnect(input: DisconnectInput): RoomState {
+    const room = this.requireRoom(input.roomId)
+
+    const disconnectedRoom = {
+      ...room,
+      phase: 'paused' as const,
+      pausedFromPhase: activePhase(room),
+      players: room.players.map((player) =>
+        player.id === input.playerId
+          ? {
+              ...player,
+              connectionStatus: 'disconnected' as const,
+            }
+          : player,
+      ),
+    }
+
+    this.rooms.set(disconnectedRoom.roomId, disconnectedRoom)
+    return disconnectedRoom
+  }
+
+  private requireRoom(roomId: string): RoomState {
+    const room = this.rooms.get(roomId)
+
+    if (room === undefined) {
+      throw new Error('Room not found.')
+    }
+
+    return room
+  }
+
+  private generateJoinPlayerId(room: RoomState): string {
+    const nextIndex = room.players.length + 1
+    return `${room.roomId.toLowerCase()}-player-${nextIndex}`
+  }
+}

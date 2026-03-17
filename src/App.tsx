@@ -1,156 +1,90 @@
-import { startTransition, useEffect, useState } from 'react'
-import type { JSX } from 'react'
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
+import { startTransition, useEffect, useRef, useState } from 'react'
+import type { CSSProperties, JSX } from 'react'
 
 import './App.css'
-import { defaultBalanceConfig } from './game/balance'
-import { getCardDefinition } from './game/cards'
-import {
-  applyEvening,
-  buyIngredients,
-  calculateInventoryAfterSales,
-  calculateOpeningInventory,
-  calculateSellableCups,
-  createNewGame,
-  generateDraft,
-  loadGame,
-  pickCard,
-  resolveDay,
-  saveGame,
-  setStrategy,
-  skipDraft,
-} from './game/engine'
-import type { CardId, CustomerVisit, DailyReport, GameState, Inventory, Recipe } from './game/types'
-
-import CardClockIcon from './assets/cards/card_clock.png'
-import CardLemonIcon from './assets/cards/card_lemon.png'
 import Customer1Sprite from './assets/customers/customer_1.png'
 import Customer2Sprite from './assets/customers/customer_2.png'
 import StandSprite from './assets/stand.png'
-import StandTier1Sprite from './assets/stand_tier_1.png'
-import StandTier3Sprite from './assets/stand_tier_3.png'
+import { defaultBalanceConfig } from './game/balance'
+import {
+  calculatePurchaseCost,
+  calculateSellableCups,
+  emptyInventory,
+} from './game/engine'
+import type { DailyPlan, Inventory } from './game/types'
+import type {
+  ClientMessage,
+  CustomerEvent,
+  FactionDefinition,
+  RoomState,
+  SimulationStartedMessage,
+} from './client/protocol'
+import { openRoomConnection, type RoomConnection, type RoomConnectionHandlers } from './client/socket'
 
+export const ROOM_SESSION_KEY = 'lemonade-stand-room-session-v1'
 
-export const SAVE_KEY = 'roguelike-lemonade-stand-save-v1'
-const IS_DEV = import.meta.env.DEV
+const DEFAULT_HOST_FACTION = 'sun-guild'
+const DEFAULT_JOIN_FACTION = 'market-tide'
 
-const DAY_PLAYBACK_MS = 9_000
-const DAY_TRANSITION_DELAY_MS = 400
-const DAY_TICK_MS = 100
-const BUSINESS_DAY_START_MINUTES = 8 * 60
-const BUSINESS_DAY_END_MINUTES = 18 * 60
-const CUSTOMER_TRAVEL_WINDOW = 0.22
-const CUSTOMER_DECISION_OFFSET = 0.08
-const CUSTOMER_INDICATOR_WINDOW = 0.08
-const DEFAULT_SIMULATION_SPEED = 1
-const SIMULATION_SPEED_OPTIONS = [0.5, 0.75, 1, 1.5, 2]
-
-interface MorningForm {
-  purchases: Inventory
-  recipe: Recipe
-  price: number
+interface StoredRoomSession {
+  roomId: string
+  playerId: string
+  name: string
+  factionId: string
+  hostPlayerId: string
 }
 
-interface SceneCustomer extends CustomerVisit {
-  visible: boolean
-  showIndicator: boolean
-  xPercent: number
-  laneOffsetRem: number
-  isPaused: boolean
+interface IdentityDraft {
+  name: string
+  factionId: string
 }
 
-function emptyInventory(): Inventory {
-  return {
-    lemons: 0,
-    sugar: 0,
-    ice: 0,
-  }
+interface LobbyForm {
+  name: string
+  roomId: string
+  factionId: string
 }
 
-function addInventories(left: Inventory, right: Inventory): Inventory {
-  return {
-    lemons: left.lemons + right.lemons,
-    sugar: left.sugar + right.sugar,
-    ice: left.ice + right.ice,
-  }
-}
-
-function createMorningForm(state: GameState): MorningForm {
-  return {
-    purchases: emptyInventory(),
-    recipe: state.plan.recipe,
-    price: state.plan.price,
-  }
-}
-
-function readStoredGame(): GameState {
-  const stored = window.localStorage.getItem(SAVE_KEY)
-
+function readStoredRoomSession(): StoredRoomSession | null {
+  const stored = window.localStorage.getItem(ROOM_SESSION_KEY)
   if (stored === null) {
-    return createNewGame()
+    return null
   }
 
   try {
-    const parsed = JSON.parse(stored)
-    const loaded = loadGame(parsed)
-    return loaded ?? createNewGame()
+    return JSON.parse(stored) as StoredRoomSession
   } catch {
-    return createNewGame()
+    return null
+  }
+}
+
+function writeStoredRoomSession(session: StoredRoomSession): void {
+  window.localStorage.setItem(ROOM_SESSION_KEY, JSON.stringify(session))
+}
+
+function searchParam(name: string): string | null {
+  return new URLSearchParams(window.location.search).get(name)
+}
+
+function factionDefinition(factionId: string): FactionDefinition {
+  const faction = defaultBalanceConfig.factions.find((candidate) => candidate.id === factionId)
+  if (faction !== undefined) {
+    return {
+      id: faction.id,
+      name: faction.name,
+      accentColor: faction.accent,
+    }
+  }
+
+  return {
+    id: DEFAULT_HOST_FACTION,
+    name: 'Sun Guild',
+    accentColor: '#f3b63f',
   }
 }
 
 function formatMoney(value: number): string {
   return `$${value.toFixed(2)}`
-}
-
-function formatSignedValue(value: number): string {
-  const sign = value > 0 ? '+' : ''
-  return `${sign}${value}`
-}
-
-function purchaseCost(market: GameState['market'], purchases: Inventory): number {
-  if (market === null) {
-    return 0
-  }
-
-  return Number(
-    (
-      purchases.lemons * market.lemons +
-      purchases.sugar * market.sugar +
-      purchases.ice * market.ice
-    ).toFixed(2),
-  )
-}
-
-function ingredientCostPerCup(market: GameState['market'], recipe: Recipe): number {
-  if (market === null) {
-    return 0
-  }
-
-  return Number(
-    (
-      recipe.lemons * market.lemons +
-      recipe.sugar * market.sugar +
-      recipe.ice * market.ice
-    ).toFixed(2),
-  )
-}
-
-function weatherLabel(state: GameState): string {
-  if (state.weather === null) {
-    return 'Forecast pending'
-  }
-
-  return defaultBalanceConfig.weatherProfiles[state.weather].label
-}
-
-function idealRecipeText(state: GameState): string {
-  if (state.weather === null) {
-    return 'No weather data yet.'
-  }
-
-  const ideal = defaultBalanceConfig.weatherProfiles[state.weather].idealRecipe
-  return `${ideal.lemons} lemon, ${ideal.sugar} sugar, ${ideal.ice} ice`
 }
 
 function numberValue(input: string): number {
@@ -165,132 +99,100 @@ function clamp(value: number, minimum: number, maximum: number): number {
   return Math.max(minimum, Math.min(maximum, value))
 }
 
-function playbackProgress(playbackMs: number): number {
-  return clamp(playbackMs / DAY_PLAYBACK_MS, 0, 1)
-}
-
-function formatClockTime(progress: number): string {
-  const dayMinutes = BUSINESS_DAY_END_MINUTES - BUSINESS_DAY_START_MINUTES
-  const elapsedMinutes =
-    progress >= 1 ? dayMinutes : Math.floor(dayMinutes * clamp(progress, 0, 1))
-  const totalMinutes = BUSINESS_DAY_START_MINUTES + elapsedMinutes
-  const hour24 = Math.floor(totalMinutes / 60)
-  const minutes = totalMinutes % 60
-  const suffix = hour24 >= 12 ? 'PM' : 'AM'
-  const hour12 = hour24 % 12 === 0 ? 12 : hour24 % 12
-
-  return `${hour12}:${minutes.toString().padStart(2, '0')} ${suffix}`
-}
-
-function visitExitProgress(visit: CustomerVisit): number {
-  return clamp(visit.arrivalProgress + CUSTOMER_TRAVEL_WINDOW, 0, 1)
-}
-
-function visitDecisionWindow(visit: CustomerVisit): {
-  start: number
-  end: number
-} {
-  const exit = visitExitProgress(visit)
-  const start = Math.min(exit, visit.arrivalProgress + CUSTOMER_DECISION_OFFSET)
-
+function addInventory(left: Inventory, right: Inventory): Inventory {
   return {
-    start,
-    end: Math.min(exit, start + CUSTOMER_INDICATOR_WINDOW),
+    lemons: left.lemons + right.lemons,
+    sugar: left.sugar + right.sugar,
+    ice: left.ice + right.ice,
   }
 }
 
-function sceneCustomer(visit: CustomerVisit, progress: number): SceneCustomer {
-  const exit = visitExitProgress(visit)
-  const visible = progress >= visit.arrivalProgress && progress <= exit
-  const travelRatio = visible ? (progress - visit.arrivalProgress) / Math.max(exit - visit.arrivalProgress, 0.001) : 0
-  const decisionWindow = visitDecisionWindow(visit)
-
-  // Target a varied "center" for each customer so they don't overlap perfectly
-  const pauseCenterRatio = 0.42 + (Math.abs(Math.sin(visit.customerIndex * 4321.1)) * 0.16) // center is between 0.42 to 0.58 of path
-
-  // Use the same time window for pausing (40% to 60% of their journey)
-  const startPauseTime = 0.4
-  const endPauseTime = 0.6
-
-  let tweakedRatio = travelRatio
-  if (travelRatio < startPauseTime) {
-    // 0 to pause point
-    tweakedRatio = travelRatio * (pauseCenterRatio / startPauseTime)
-  } else if (travelRatio < endPauseTime) {
-    // pause at pseudo-random center
-    tweakedRatio = pauseCenterRatio
-  } else {
-    // pause point to 1.0
-    tweakedRatio = pauseCenterRatio + ((travelRatio - endPauseTime) * ((1.0 - pauseCenterRatio) / (1.0 - endPauseTime)))
+function findCurrentPlayer(room: RoomState | null, playerId: string | null) {
+  if (room === null || playerId === null) {
+    return null
   }
 
-  return {
-    ...visit,
-    visible,
-    showIndicator: progress >= decisionWindow.start && progress <= decisionWindow.end,
-    xPercent: 105 - tweakedRatio * 118,
-    laneOffsetRem: (visit.customerIndex % 3) * 0.28,
-    isPaused: travelRatio >= 0.4 && travelRatio < 0.6,
-  }
+  return room.players.find((player) => player.id === playerId) ?? null
 }
 
-function visitsResolvedByProgress(visits: CustomerVisit[], progress: number): CustomerVisit[] {
-  return visits.filter((visit) => progress >= visitDecisionWindow(visit).start)
-}
-
-function formatSimulationSpeed(value: number): string {
-  return `${value}x`
-}
-
-function formatCupCapacity(count: number): string {
-  if (!Number.isFinite(count)) {
-    return 'Unlimited'
+function weatherLabel(room: RoomState | null): string {
+  if (room?.weather === null || room?.weather === undefined) {
+    return 'Waiting for both players'
   }
 
-  return `${count} cup${count === 1 ? '' : 's'}`
+  return defaultBalanceConfig.weatherProfiles[room.weather].label
 }
 
-function formatCupDelta(current: number, projected: number): string {
-  if (!Number.isFinite(projected)) {
-    return Number.isFinite(current) ? 'Unlimited after shopping' : 'Still unlimited'
+function eventProgress(event: CustomerEvent, elapsedMs: number): number {
+  const resolveAt = event.arrivalOffsetMs + 1_500
+  if (elapsedMs <= event.arrivalOffsetMs) {
+    return 0
   }
 
-  if (!Number.isFinite(current)) {
-    return 'Already unlimited'
-  }
-
-  const delta = Math.max(0, projected - current)
-  return delta === 0 ? 'No extra cups' : `+${formatCupCapacity(delta)}`
+  return clamp((elapsedMs - event.arrivalOffsetMs) / Math.max(resolveAt - event.arrivalOffsetMs, 1), 0, 1)
 }
 
-function displayInventory(state: GameState, playbackMs: number): Inventory {
-  if (state.phase !== 'day' || state.pendingReport === null) {
-    return state.inventory
+function isEventVisible(event: CustomerEvent, elapsedMs: number): boolean {
+  return elapsedMs >= event.arrivalOffsetMs && elapsedMs <= event.arrivalOffsetMs + 1_500
+}
+
+function isEventResolved(event: CustomerEvent, elapsedMs: number): boolean {
+  return elapsedMs >= event.arrivalOffsetMs + 1_500
+}
+
+function currentElapsedMs(room: RoomState | null, simulationStartAtMs: number | null, nowMs: number): number {
+  if (room?.phase !== 'simulating' || room.simulation === null || simulationStartAtMs === null) {
+    return 0
   }
 
-  const progress = playbackProgress(playbackMs)
-  const resolvedVisits = visitsResolvedByProgress(state.pendingReport.customerVisits, progress)
-  const resolvedSales = resolvedVisits.filter((visit) => visit.outcome === 'buy').length
-  const openingInventory = calculateOpeningInventory(
-    state.inventory,
-    state.plan.recipe,
-    state.pendingReport.cupsSold,
+  return clamp(nowMs - simulationStartAtMs, 0, room.simulation.durationMs)
+}
+
+function buildSceneStyle(event: CustomerEvent, elapsedMs: number, players: RoomState['players']): CSSProperties {
+  const progress = eventProgress(event, elapsedMs)
+  const targetIndex = Math.max(
+    0,
+    players.findIndex((player) => player.id === event.chosenPlayerId),
   )
+  const startX = 50
+  const targetX = event.chosenPlayerId === null ? 50 : targetIndex === 0 ? 18 : 82
+  const xJitter = Math.sin((event.id.length + 3) * 12.7) * 1.5
+  const yJitter = Math.cos((event.id.length + 9) * 4.1) * 1.2
+  const lane = event.id.length % 3
+  const xPercent = startX + (targetX - startX) * progress + xJitter
+  const yPercent = 8 + progress * 64 + lane * 5 + yJitter
 
-  return calculateInventoryAfterSales(openingInventory, state.plan.recipe, resolvedSales)
+  return {
+    left: `${xPercent}%`,
+    bottom: `${yPercent}%`,
+  }
+}
+
+function buildPlan(currentPlayer: ReturnType<typeof findCurrentPlayer>): DailyPlan {
+  if (currentPlayer === null || currentPlayer.dailyPlan === null) {
+    return {
+      purchases: emptyInventory(),
+      recipe: defaultBalanceConfig.defaultRecipe,
+      price: defaultBalanceConfig.defaultPrice,
+    }
+  }
+
+  return {
+    purchases: { ...currentPlayer.dailyPlan.purchases },
+    recipe: { ...currentPlayer.dailyPlan.recipe },
+    price: currentPlayer.dailyPlan.price,
+  }
 }
 
 function MetricCard({
   label,
   value,
-  accent = false,
 }: {
   label: string
   value: string
-  accent?: boolean
 }): JSX.Element {
   return (
-    <article className={`metric-card${accent ? ' metric-card-accent' : ''}`} aria-label={`${label}: ${value}`}>
+    <article className="metric-card" aria-label={`${label}: ${value}`}>
       <span className="metric-label">{label}</span>
       <strong className="metric-value">{value}</strong>
     </article>
@@ -300,17 +202,15 @@ function MetricCard({
 function NumberField({
   label,
   value,
-  min,
-  max,
+  min = 0,
   step = 1,
   onChange,
 }: {
   label: string
   value: number
-  min: number
-  max?: number
+  min?: number
   step?: number
-  onChange: (nextValue: number) => void
+  onChange: (value: number) => void
 }): JSX.Element {
   return (
     <label className="field">
@@ -318,321 +218,266 @@ function NumberField({
       <input
         className="field-input"
         type="number"
-        min={min}
-        max={max}
-        step={step}
         value={value}
+        min={min}
+        step={step}
         onChange={(event) => onChange(numberValue(event.target.value))}
       />
     </label>
   )
 }
 
-function RangeSliderField({
-  label,
-  value,
-  min,
-  max,
-  step = 1,
-  onChange,
-}: {
-  label: string
-  value: number
-  min: number
-  max: number
-  step?: number
-  onChange: (nextValue: number) => void
-}): JSX.Element {
-  return (
-    <label className="field">
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <span className="field-label">{label}</span>
-        <strong className="metric-value" style={{ fontSize: '1.2rem' }}>{Number.isInteger(step) ? value : value.toFixed(1)}</strong>
-      </div>
-      <input
-        className="field-slider"
-        type="range"
-        min={min}
-        max={max}
-        step={step}
-        value={value}
-        onChange={(event) => onChange(numberValue(event.target.value))}
-      />
-    </label>
-  )
-}
-
-function HintList(): JSX.Element {
-  return (
-    <section className="panel hint-panel">
-      <p className="eyebrow">Stand wisdom</p>
-      <h3>How to stay alive</h3>
-      <ul className="notes-list">
-        <li>Hot days love ice. Rainy days tolerate richer recipes.</li>
-        <li>Rent lands every 5 days, and it scales up fast after each payment.</li>
-        <li>Some cards want you to build a reputation empire. Others dare you to cash it in.</li>
-      </ul>
-    </section>
-  )
-}
-
-function ActiveCardsPanel({ state }: { state: GameState }): JSX.Element {
-  return (
-    <section className="panel">
-      <p className="eyebrow">Active cards</p>
-      <h3>Current build</h3>
-      {state.activeCards.length === 0 ? (
-        <p className="muted">No modifiers yet. Night markets are where things get weird.</p>
-      ) : (
-        <ul className="card-stack">
-          {state.activeCards.map((activeCard) => {
-            const definition = getCardDefinition(activeCard.id)
-            const duration =
-              activeCard.remainingDays === undefined ? 'Permanent' : `${activeCard.remainingDays} day(s) left`
-
-            return (
-              <li className="mini-card" key={`${activeCard.id}-${activeCard.draftedOnDay}`}>
-                <div>
-                  <strong>{definition.name}</strong>
-                  <p>{definition.description}</p>
-                </div>
-                <span className="mini-tag">{duration}</span>
-              </li>
-            )
-          })}
-        </ul>
-      )}
-    </section>
-  )
-}
-
-function DevToolsPanel({
-  simulationSpeed,
-  onSimulationSpeedChange,
-  onResetRun,
-}: {
-  simulationSpeed: number
-  onSimulationSpeedChange: (nextValue: number) => void
-  onResetRun: () => void
-}): JSX.Element {
-  return (
-    <section className="panel">
-      <p className="eyebrow">Dev tools</p>
-      <h3>Dev Tools</h3>
-      <div className="field-grid">
-        <label className="field" htmlFor="simulation-speed">
-          <span className="field-label">Simulation Speed</span>
-          <select
-            className="field-input"
-            id="simulation-speed"
-            value={simulationSpeed}
-            onChange={(event) => onSimulationSpeedChange(Number(event.target.value))}
-          >
-            {SIMULATION_SPEED_OPTIONS.map((speed) => (
-              <option key={speed} value={speed}>
-                {formatSimulationSpeed(speed)}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
-      <div className="action-row">
-        <button className="action-button action-button-secondary" onClick={onResetRun}>
-          Reset Current Run
-        </button>
-        <p className="muted">Clears the saved run and starts a fresh day-one state.</p>
-      </div>
-    </section>
-  )
-}
-
-function MorningScreen({
-  state,
-  onRunDay,
+function LobbyScreen({
+  form,
+  reconnectSession,
   error,
+  onChange,
+  onHost,
+  onJoin,
+  onReconnect,
 }: {
-  state: GameState
-  onRunDay: (form: MorningForm) => void
+  form: LobbyForm
+  reconnectSession: StoredRoomSession | null
   error: string | null
+  onChange: (next: Partial<LobbyForm>) => void
+  onHost: () => void
+  onJoin: () => void
+  onReconnect: () => void
 }): JSX.Element {
-  const [form, setForm] = useState<MorningForm>(() => createMorningForm(state))
-  const spend = purchaseCost(state.market, form.purchases)
-  const cupCost = ingredientCostPerCup(state.market, form.recipe)
-  const canAfford = spend <= state.money
-  const forecast = weatherLabel(state)
-  const currentCupCapacity = calculateSellableCups(state.inventory, form.recipe)
-  const projectedCupCapacity = calculateSellableCups(
-    addInventories(state.inventory, form.purchases),
-    form.recipe,
-  )
-
   return (
-    <section className="phase-shell">
-      <div className="panel phase-header">
-        <div>
-          <p className="eyebrow">Morning setup</p>
-          <h2>Morning Setup</h2>
-          <p className="muted">
-            Forecast: <strong>{forecast}</strong>. Ideal crowd-pleaser: {idealRecipeText(state)}.
-          </p>
-        </div>
-        <div className="summary-chip-row">
-          <span className="summary-chip">Spend plan {formatMoney(spend)}</span>
-          <span className="summary-chip">Cup cost {formatMoney(cupCost)}</span>
-        </div>
+    <section className="app-stage">
+      <div className="panel hero-panel">
+        <p className="eyebrow">LAN MVP</p>
+        <h1>Multiplayer Lemonade Stand</h1>
+        <p className="muted">
+          Host a room on this laptop, share the LAN URL, and let the market decide who wins the rush.
+        </p>
       </div>
 
-      <section className="panel sales-forecast-panel">
-        <div className="phase-header">
-          <div>
-            <p className="eyebrow">Sales forecast</p>
-            <h3>Sellable cups</h3>
-          </div>
-          <span className="summary-chip">Projected stock {formatCupCapacity(projectedCupCapacity)}</span>
-        </div>
-        <div className="forecast-grid">
-          <MetricCard label="Current Inventory" value={formatCupCapacity(currentCupCapacity)} accent />
-          <MetricCard label="After Shopping" value={formatCupCapacity(projectedCupCapacity)} />
-          <MetricCard label="Extra Capacity" value={formatCupDelta(currentCupCapacity, projectedCupCapacity)} />
-        </div>
-        <p className="forecast-copy">
-          <strong>{formatCupCapacity(currentCupCapacity)}</strong> from current inventory.{' '}
-          <strong>{formatCupCapacity(projectedCupCapacity)}</strong> after shopping.
-        </p>
-      </section>
-
-      <div className="phase-grid">
+      <div className="panel-grid">
         <section className="panel">
-          <p className="eyebrow">Market</p>
-          <h3>Buy ingredients</h3>
-          <div className="market-grid">
-            <MetricCard label="Lemons" value={`${formatMoney(state.market?.lemons ?? 0)} each`} />
-            <MetricCard label="Sugar" value={`${formatMoney(state.market?.sugar ?? 0)} each`} />
-            <MetricCard label="Ice" value={`${formatMoney(state.market?.ice ?? 0)} each`} />
-          </div>
+          <p className="eyebrow">Identity</p>
+          <h2>Join the market</h2>
           <div className="field-grid">
-            <NumberField
-              label="Buy Lemons"
-              value={form.purchases.lemons}
-              min={0}
-              onChange={(value) =>
-                setForm((current) => ({
-                  ...current,
-                  purchases: {
-                    ...current.purchases,
-                    lemons: value,
-                  },
-                }))
-              }
-            />
-            <NumberField
-              label="Buy Sugar"
-              value={form.purchases.sugar}
-              min={0}
-              onChange={(value) =>
-                setForm((current) => ({
-                  ...current,
-                  purchases: {
-                    ...current.purchases,
-                    sugar: value,
-                  },
-                }))
-              }
-            />
-            <NumberField
-              label="Buy Ice"
-              value={form.purchases.ice}
-              min={0}
-              onChange={(value) =>
-                setForm((current) => ({
-                  ...current,
-                  purchases: {
-                    ...current.purchases,
-                    ice: value,
-                  },
-                }))
-              }
-            />
+            <label className="field">
+              <span className="field-label">Your Name</span>
+              <input
+                className="field-input"
+                value={form.name}
+                onChange={(event) => onChange({ name: event.target.value })}
+              />
+            </label>
+            <label className="field">
+              <span className="field-label">Faction</span>
+              <select
+                className="field-input"
+                value={form.factionId}
+                onChange={(event) => onChange({ factionId: event.target.value })}
+              >
+                {defaultBalanceConfig.factions.map((faction) => (
+                  <option key={faction.id} value={faction.id}>
+                    {faction.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <div className="action-row">
+            <button className="action-button action-button-primary" onClick={onHost}>
+              Host LAN Room
+            </button>
           </div>
         </section>
 
         <section className="panel">
-          <p className="eyebrow">Recipe</p>
-          <h3>Set the pitch</h3>
+          <p className="eyebrow">Join</p>
+          <h2>Enter a room code</h2>
           <div className="field-grid">
-            <RangeSliderField
+            <label className="field">
+              <span className="field-label">Room ID</span>
+              <input
+                className="field-input"
+                value={form.roomId}
+                onChange={(event) => onChange({ roomId: event.target.value.toUpperCase() })}
+              />
+            </label>
+          </div>
+          <div className="action-row">
+            <button className="action-button action-button-secondary" onClick={onJoin}>
+              Join LAN Room
+            </button>
+          </div>
+        </section>
+      </div>
+
+      {reconnectSession !== null ? (
+        <section className="panel">
+          <p className="eyebrow">Reconnect</p>
+          <button className="action-button action-button-secondary" onClick={onReconnect}>
+            Reconnect to {reconnectSession.roomId}
+          </button>
+        </section>
+      ) : null}
+
+      {error !== null ? <p className="error-text">{error}</p> : null}
+    </section>
+  )
+}
+
+function WaitingScreen({
+  roomId,
+}: {
+  roomId: string
+}): JSX.Element {
+  return (
+    <section className="app-stage">
+      <div className="panel hero-panel">
+        <p className="eyebrow">Room created</p>
+        <h1>{roomId}</h1>
+        <p className="muted">
+          Share your LAN client URL with the second player and have them join room {roomId}.
+        </p>
+      </div>
+    </section>
+  )
+}
+
+function PlanningScreen({
+  room,
+  currentPlayer,
+  localPlan,
+  error,
+  onPlanChange,
+  onLockIn,
+}: {
+  room: RoomState
+  currentPlayer: NonNullable<ReturnType<typeof findCurrentPlayer>>
+  localPlan: DailyPlan
+  error: string | null
+  onPlanChange: (next: DailyPlan) => void
+  onLockIn: () => void
+}): JSX.Element {
+  const market = room.marketBasePrices ?? emptyInventory()
+  const spend = room.marketBasePrices === null ? 0 : calculatePurchaseCost(market, localPlan.purchases)
+  const projectedInventory = addInventory(currentPlayer.inventory, localPlan.purchases)
+  const projectedCups = calculateSellableCups(projectedInventory, localPlan.recipe)
+  const canAfford = spend <= currentPlayer.money
+
+  return (
+    <section className="app-stage">
+      <div className="panel hero-panel">
+        <p className="eyebrow">Planning phase</p>
+        <h1>Set today&apos;s edge</h1>
+        <p className="muted">
+          Forecast: <strong>{weatherLabel(room)}</strong>. Plans stay private until both stands lock in.
+        </p>
+      </div>
+
+      <div className="metric-grid">
+        <MetricCard label="Room" value={room.roomId} />
+        <MetricCard label="Day" value={`${room.day}`} />
+        <MetricCard label="Cash" value={formatMoney(currentPlayer.money)} />
+        <MetricCard label="Projected Cups" value={Number.isFinite(projectedCups) ? `${projectedCups}` : 'Infinite'} />
+      </div>
+
+      <div className="panel-grid">
+        <section className="panel">
+          <p className="eyebrow">Market</p>
+          <h2>Buy ingredients</h2>
+          <div className="metric-grid compact-grid">
+            <MetricCard label="Lemons" value={formatMoney(market.lemons)} />
+            <MetricCard label="Sugar" value={formatMoney(market.sugar)} />
+            <MetricCard label="Ice" value={formatMoney(market.ice)} />
+          </div>
+          <div className="field-grid">
+            <NumberField
+              label="Buy Lemons"
+              value={localPlan.purchases.lemons}
+              onChange={(lemons) =>
+                onPlanChange({
+                  ...localPlan,
+                  purchases: { ...localPlan.purchases, lemons },
+                })
+              }
+            />
+            <NumberField
+              label="Buy Sugar"
+              value={localPlan.purchases.sugar}
+              onChange={(sugar) =>
+                onPlanChange({
+                  ...localPlan,
+                  purchases: { ...localPlan.purchases, sugar },
+                })
+              }
+            />
+            <NumberField
+              label="Buy Ice"
+              value={localPlan.purchases.ice}
+              onChange={(ice) =>
+                onPlanChange({
+                  ...localPlan,
+                  purchases: { ...localPlan.purchases, ice },
+                })
+              }
+            />
+          </div>
+          <p className="muted">Shopping basket: {formatMoney(spend)}</p>
+        </section>
+
+        <section className="panel">
+          <p className="eyebrow">Recipe</p>
+          <h2>Dial in the recipe</h2>
+          <div className="field-grid">
+            <NumberField
               label="Lemons per Cup"
-              value={form.recipe.lemons}
+              value={localPlan.recipe.lemons}
               min={0}
-              max={5}
-              step={0.1}
-              onChange={(value) =>
-                setForm((current) => ({
-                  ...current,
-                  recipe: {
-                    ...current.recipe,
-                    lemons: value,
-                  },
-                }))
+              onChange={(lemons) =>
+                onPlanChange({
+                  ...localPlan,
+                  recipe: { ...localPlan.recipe, lemons },
+                })
               }
             />
-            <RangeSliderField
+            <NumberField
               label="Sugar per Cup"
-              value={form.recipe.sugar}
+              value={localPlan.recipe.sugar}
               min={0}
-              max={5}
-              step={0.1}
-              onChange={(value) =>
-                setForm((current) => ({
-                  ...current,
-                  recipe: {
-                    ...current.recipe,
-                    sugar: value,
-                  },
-                }))
+              onChange={(sugar) =>
+                onPlanChange({
+                  ...localPlan,
+                  recipe: { ...localPlan.recipe, sugar },
+                })
               }
             />
-            <RangeSliderField
+            <NumberField
               label="Ice per Cup"
-              value={form.recipe.ice}
+              value={localPlan.recipe.ice}
               min={0}
-              max={5}
-              step={0.1}
-              onChange={(value) =>
-                setForm((current) => ({
-                  ...current,
-                  recipe: {
-                    ...current.recipe,
-                    ice: value,
-                  },
-                }))
+              onChange={(ice) =>
+                onPlanChange({
+                  ...localPlan,
+                  recipe: { ...localPlan.recipe, ice },
+                })
               }
             />
             <NumberField
               label="Price per Cup"
-              value={form.price}
-              min={0}
+              value={localPlan.price}
               step={0.05}
-              onChange={(value) =>
-                setForm((current) => ({
-                  ...current,
-                  price: value,
-                }))
-              }
+              onChange={(price) => onPlanChange({ ...localPlan, price })}
             />
           </div>
           <div className="action-row">
             <button
               className="action-button action-button-primary"
-              disabled={!canAfford}
-              onClick={() => onRunDay(form)}
+              disabled={!canAfford || currentPlayer.hasSubmittedPlan}
+              onClick={onLockIn}
             >
-              Run Day
+              Lock in Plan
             </button>
             <p className="muted">
-              {canAfford
-                ? 'You are good to go.'
-                : 'Your shopping list costs more than your cash box.'}
+              {currentPlayer.hasSubmittedPlan ? 'Plan locked. Waiting on the other stand.' : 'Your choices stay private until both players are ready.'}
             </p>
           </div>
           {error !== null ? <p className="error-text">{error}</p> : null}
@@ -642,518 +487,442 @@ function MorningScreen({
   )
 }
 
-function EveningScreen({
-  report,
-  history,
-  onOpenShop,
+function SimulationScreen({
+  room,
+  elapsedMs,
 }: {
-  report: DailyReport
-  history: DailyReport[]
-  onOpenShop: () => void
+  room: RoomState
+  elapsedMs: number
 }): JSX.Element {
-  const chartData = history.map((h, i) => {
-    const previousMoney = i === 0 ? defaultBalanceConfig.startingMoney : history[i - 1].moneyAfterRent
-    const profit = h.moneyAfterRent - previousMoney
-    return { ...h, profit }
-  })
-
-  return (
-    <section className="phase-shell">
-      <div className="panel phase-header">
-        <div>
-          <p className="eyebrow">Evening results</p>
-          <h2>Evening Results</h2>
-          <p className="muted">Today&apos;s weather was {defaultBalanceConfig.weatherProfiles[report.weather].label}.</p>
-        </div>
-        <button className="action-button action-button-primary" onClick={onOpenShop}>
-          Open Night Shop
-        </button>
-      </div>
-
-      <div className="report-grid">
-        <MetricCard label="Cups Sold" value={`${report.cupsSold}`} accent />
-        <MetricCard label="Revenue" value={formatMoney(report.revenue)} />
-        <MetricCard label="Free Sales" value={`${report.freeSales}`} />
-        <MetricCard label="Reputation Change" value={formatSignedValue(report.reputationChange)} />
-        <MetricCard label="Rent Paid" value={report.rentTriggered ? formatMoney(report.rentPaid) : 'Not due'} />
-        <MetricCard label="Spoiled Ice" value={`${report.spoilage.ice}`} />
-      </div>
-
-      <div className="phase-grid">
-        <section className="panel chart-panel">
-          <p className="eyebrow">Trends</p>
-          <h3>Revenue & Profit</h3>
-          <div style={{ width: '100%', height: 180, marginTop: '1rem' }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={chartData}>
-                <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
-                <XAxis dataKey="day" hide />
-                <YAxis hide domain={['auto', 'auto']} />
-                <Tooltip 
-                  formatter={(value: any) => formatMoney(Number(value) || 0)}
-                  labelFormatter={(day: any) => `Day ${Number(day) || 0}`}
-                  contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}
-                />
-                <Line type="monotone" dataKey="revenue" name="Revenue" stroke="#e5ae1f" strokeWidth={3} dot={false} />
-                <Line type="monotone" dataKey="profit" name="Profit" stroke="#6ab04c" strokeWidth={3} dot={false} />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-        </section>
-
-        <section className="panel">
-          <p className="eyebrow">Breakdown</p>
-          <h3>Customer reaction</h3>
-          <ul className="notes-list">
-            <li>Potential customers: {report.potentialCustomers}</li>
-            <li>Average satisfaction: {(report.averageSatisfaction * 100).toFixed(0)}%</li>
-            <li>Premium sales: {report.premiumSales}</li>
-            <li>Money after rent: {formatMoney(report.moneyAfterRent)}</li>
-          </ul>
-        </section>
-
-        <section className="panel">
-          <p className="eyebrow">Notes</p>
-          <h3>What changed tonight</h3>
-          {report.notes.length === 0 ? (
-            <p className="muted">A clean day. No special card hooks fired this evening.</p>
-          ) : (
-            <ul className="notes-list">
-              {report.notes.map((note) => (
-                <li key={note}>{note}</li>
-              ))}
-            </ul>
-          )}
-        </section>
-      </div>
-    </section>
-  )
-}
-
-function DayScreen({
-  state,
-  playbackMs,
-}: {
-  state: GameState
-  playbackMs: number
-}): JSX.Element {
-  const report = state.pendingReport
-
-  if (report === null) {
+  const simulation = room.simulation
+  if (simulation === null) {
     return (
-      <section className="phase-shell">
+      <section className="app-stage">
         <div className="panel">
-          <p className="muted">Day playback data is missing.</p>
+          <p className="muted">Simulation data is missing.</p>
         </div>
       </section>
     )
   }
 
-  const progress = playbackProgress(playbackMs)
-  const clock = formatClockTime(progress)
-  const customers = report.customerVisits
-    .map((visit) => sceneCustomer(visit, progress))
-    .filter((visit) => visit.visible)
-  const resolvedVisits = visitsResolvedByProgress(report.customerVisits, progress)
-  const purchases = resolvedVisits.filter((visit) => visit.outcome === 'buy').length
-  const passed = resolvedVisits.filter((visit) => visit.outcome === 'skip').length
-  const soldOut = resolvedVisits.filter((visit) => visit.outcome === 'soldOut').length
+  const visibleEvents = simulation.customerEvents.filter((event) => isEventVisible(event, elapsedMs))
+  const resolvedEvents = simulation.customerEvents.filter((event) => isEventResolved(event, elapsedMs))
+  const playerSales = room.players.map((player) =>
+    resolvedEvents.filter((event) => event.outcome === 'buy' && event.chosenPlayerId === player.id).length,
+  )
 
   return (
-    <section className="phase-shell">
-      <div className="panel phase-header">
-        <div>
-          <p className="eyebrow">Day simulation</p>
-          <h2>Day Rush</h2>
-          <p className="muted">
-            {defaultBalanceConfig.weatherProfiles[report.weather].label} traffic is rolling by. Watch the crowd react before the books close.
-          </p>
-        </div>
-        <div className="summary-chip-row">
-          <span className="summary-chip">Time {clock}</span>
-          <span className="summary-chip">Foot traffic {report.potentialCustomers}</span>
-        </div>
+    <section className="app-stage">
+      <div className="panel hero-panel">
+        <p className="eyebrow">Simulation phase</p>
+        <h1>Crowd Rush</h1>
+        <p className="muted">Shared timeline live. The same customer wave is playing on every connected laptop.</p>
       </div>
 
-      <section className="panel day-scene-panel">
-        <div className="scene-skyline" aria-hidden="true">
-          <div className="scene-building scene-building-teal" />
-          <div className="scene-building scene-building-gold" />
-          <div className="scene-tree" />
-        </div>
+      <div className="metric-grid">
+        <MetricCard label="Resolved" value={`${resolvedEvents.length}/${simulation.customerEvents.length}`} />
+        <MetricCard label="Weather" value={weatherLabel(room)} />
+        <MetricCard label="Timeline" value={`${Math.round((elapsedMs / simulation.durationMs) * 100)}%`} />
+      </div>
 
-        <div className="day-clock-row">
-          <div>
-            <p className="eyebrow">Business clock</p>
-            <strong aria-label="Business clock" className="day-clock-value">
-              {clock}
-            </strong>
+      <section className="panel crowd-panel">
+        <div className="crowd-scene">
+          <div className="crowd-road" aria-hidden="true" />
+          <div className="stand-column stand-column-left">
+            <p className="stand-name">{room.players[0]?.name}</p>
+            <img className="stand-sprite" src={StandSprite} alt={`${room.players[0]?.name} stand`} />
+            <span className="stand-score">{playerSales[0] ?? 0} sales</span>
           </div>
-          <div className="summary-chip-row">
-            <span className="summary-chip">Sold {purchases}</span>
-            <span className="summary-chip">Passed {passed + soldOut}</span>
-          </div>
-        </div>
-
-        <div className={`day-scene weather-${report.weather}`} role="img" aria-label={`Lemonade stand day scene at ${clock}`}>
-          <div className="weather-overlay"></div>
-          <div className="scene-road" aria-hidden="true" />
-          <div className="scene-sidewalk" aria-hidden="true" />
-          <div className="stand-cart" aria-hidden="true">
-            <img 
-              src={
-                state.reputation < 40 ? StandTier1Sprite : 
-                state.reputation > 75 ? StandTier3Sprite : 
-                StandSprite
-              } 
-              alt="Lemonade Stand" 
-              className="stand-sprite" 
-            />
+          <div className="stand-column stand-column-right">
+            <p className="stand-name">{room.players[1]?.name}</p>
+            <img className="stand-sprite" src={StandSprite} alt={`${room.players[1]?.name} stand`} />
+            <span className="stand-score">{playerSales[1] ?? 0} sales</span>
           </div>
 
-          <div className="customer-lane">
-            {customers.map((visit) => {
-              return (
-              <div
-                className={`customer customer-${visit.outcome}`}
-                key={visit.customerIndex}
-                style={{
-                  left: `${visit.xPercent}%`,
-                  bottom: `${1.5 + visit.laneOffsetRem}rem`,
-                }}
-              >
-                {visit.showIndicator ? (
-                  <>
-                    <span className={`customer-indicator customer-indicator-${visit.indicator}`} aria-label={visit.outcome === 'buy' ? 'Purchase decision yes' : 'Purchase decision no'}>
-                      {visit.indicator === 'check' ? '✅' : '❌'}
-                    </span>
-                    {visit.outcome === 'buy' && (
-                       <span className="float-money">+{formatMoney(report.pricePerCup)}</span>
-                    )}
-                  </>
-                ) : null}
-                <img 
-                  src={visit.customerIndex % 2 === 0 ? Customer1Sprite : Customer2Sprite}
-                  alt="Customer"
-                  className={`customer-sprite ${visit.isPaused ? 'customer-paused' : ''}`}
-                />
-              </div>
-            )})}
-          </div>
-        </div>
-
-        <div className="report-grid">
-          <MetricCard label="Resolved" value={`${resolvedVisits.length}/${report.potentialCustomers}`} accent />
-          <MetricCard label="Purchases" value={`${purchases}`} />
-          <MetricCard label="Walked On" value={`${passed}`} />
-          <MetricCard label="Sold Out" value={`${soldOut}`} />
+          {visibleEvents.map((event) => (
+            <div className={`crowd-customer crowd-${event.outcome}`} key={event.id} style={buildSceneStyle(event, elapsedMs, room.players)}>
+              <img
+                className="customer-sprite"
+                src={event.id.length % 2 === 0 ? Customer1Sprite : Customer2Sprite}
+                alt="Customer"
+              />
+              {event.outcome === 'buy' ? <span className="sale-tag">+{formatMoney(event.salePrice)}</span> : null}
+            </div>
+          ))}
         </div>
       </section>
     </section>
   )
 }
 
-function NightScreen({
-  state,
-  onPick,
-  onSkip,
+function ResultsScreen({
+  room,
+  currentPlayerId,
+  onNextDay,
 }: {
-  state: GameState
-  onPick: (cardId: CardId) => void
-  onSkip: () => void
+  room: RoomState
+  currentPlayerId: string | null
+  onNextDay: () => void
 }): JSX.Element {
-  const affordableCards = state.draftOptions.filter((cardId) => getCardDefinition(cardId).cost <= state.money)
+  const hasRequestedNextDay =
+    currentPlayerId !== null && room.requestedNextDayPlayerIds.includes(currentPlayerId)
 
   return (
-    <section className="phase-shell">
-      <div className="panel phase-header">
-        <div>
-          <p className="eyebrow">Night market</p>
-          <h2>Night Market</h2>
-          <p className="muted">Choose one upgrade. Three offers, one pick, and tomorrow&apos;s whole economy tilts around it.</p>
-        </div>
-        <button className="action-button action-button-secondary" onClick={onSkip}>
-          Skip tonight
+    <section className="app-stage">
+      <div className="panel hero-panel">
+        <p className="eyebrow">Results phase</p>
+        <h1>Market Results</h1>
+        <p className="muted">Compare both stands, then request the next day when everyone is ready to keep playing.</p>
+      </div>
+
+      <div className="panel-grid">
+        {room.players.map((player) => (
+          <section className="panel" key={player.id}>
+            <p className="eyebrow">{player.faction.name}</p>
+            <h2>{player.name}</h2>
+            <div className="metric-grid compact-grid">
+              <MetricCard label="Cups Sold" value={`${player.dailyResults?.cupsSold ?? 0}`} />
+              <MetricCard label="Revenue" value={formatMoney(player.dailyResults?.revenue ?? 0)} />
+              <MetricCard label="Satisfaction" value={`${Math.round((player.dailyResults?.satisfaction ?? 0) * 100)}%`} />
+              <MetricCard label="Rep Change" value={`${(player.dailyResults?.reputationDelta ?? 0) >= 0 ? '+' : ''}${player.dailyResults?.reputationDelta ?? 0}`} />
+            </div>
+          </section>
+        ))}
+      </div>
+
+      <div className="panel">
+        <button
+          className="action-button action-button-primary"
+          disabled={hasRequestedNextDay}
+          onClick={onNextDay}
+        >
+          Request Next Day
         </button>
+        <p className="muted">
+          {hasRequestedNextDay
+            ? 'Next day requested. Waiting on the other stand.'
+            : 'Request the next day when you are ready to keep playing.'}
+        </p>
       </div>
-
-      <div className="draft-grid">
-        {state.draftOptions.map((cardId) => {
-          const card = getCardDefinition(cardId)
-          const disabled = card.cost > state.money
-
-          return (
-            <article className={`draft-card${disabled ? ' draft-card-disabled' : ''}`} key={card.id}>
-              <div className="draft-head">
-                <p className="eyebrow">{card.category}</p>
-                <span className="mini-tag">{formatMoney(card.cost)}</span>
-              </div>
-              <img 
-                src={card.id.includes('timer') || card.id.includes('clock') ? CardClockIcon : CardLemonIcon} 
-                alt="" 
-                className="draft-card-icon" 
-              />
-              <h3>{card.name}</h3>
-              <p className="muted">{card.description}</p>
-              <button
-                className="action-button action-button-primary"
-                disabled={disabled}
-                onClick={() => onPick(card.id)}
-              >
-                Pick {card.name}
-              </button>
-            </article>
-          )
-        })}
-      </div>
-
-      {affordableCards.length === 0 ? (
-        <p className="muted centered-text">Nothing is in budget tonight, so skipping is the safe play.</p>
-      ) : null}
     </section>
   )
 }
 
-function GameOverScreen({
-  state,
-  onRestart,
-}: {
-  state: GameState
-  onRestart: () => void
-}): JSX.Element {
+function PausedScreen({ room }: { room: RoomState }): JSX.Element {
   return (
-    <section className="phase-shell">
-      <div className="panel game-over-panel">
-        <p className="eyebrow">Stand closed</p>
-        <h2>Stand Closed</h2>
-        <p className="muted">The rent finally won.</p>
-        <div className="report-grid">
-          <MetricCard label="Days Survived" value={`${state.day}`} accent />
-          <MetricCard label="Final Cash" value={formatMoney(state.money)} />
-          <MetricCard label="Reputation" value={`${state.reputation}`} />
-        </div>
+    <section className="app-stage">
+      <div className="panel hero-panel">
+        <p className="eyebrow">Connection paused</p>
+        <h1>Waiting for all players</h1>
         <p className="muted">
-          {state.lastReport === null
-            ? 'The books went red before the next sunrise.'
-            : `Last rent paid: ${formatMoney(state.lastReport.rentPaid)}. You were ${formatMoney(
-                Math.abs(state.money),
-              )} short.`}
+          Room {room.roomId} is paused because someone disconnected. Reconnect the missing player to resume.
         </p>
-        <button className="action-button action-button-primary" onClick={onRestart}>
-          Start New Run
-        </button>
       </div>
     </section>
   )
 }
 
 function App(): JSX.Element {
-  const [state, setState] = useState<GameState>(() => readStoredGame())
+  const [reconnectSession, setReconnectSession] = useState<StoredRoomSession | null>(() =>
+    readStoredRoomSession(),
+  )
+  const [lobbyForm, setLobbyForm] = useState<LobbyForm>({
+    name: reconnectSession?.name ?? searchParam('name') ?? '',
+    roomId: reconnectSession?.roomId ?? searchParam('roomId') ?? '',
+    factionId: reconnectSession?.factionId ?? searchParam('faction') ?? DEFAULT_HOST_FACTION,
+  })
+  const [session, setSession] = useState<StoredRoomSession | null>(null)
+  const [room, setRoom] = useState<RoomState | null>(null)
+  const [localPlan, setLocalPlan] = useState<DailyPlan>({
+    purchases: emptyInventory(),
+    recipe: defaultBalanceConfig.defaultRecipe,
+    price: defaultBalanceConfig.defaultPrice,
+  })
+  const [simulationStartAtMs, setSimulationStartAtMs] = useState<number | null>(null)
+  const [clockNowMs, setClockNowMs] = useState(Date.now())
   const [error, setError] = useState<string | null>(null)
-  const [dayPlaybackMs, setDayPlaybackMs] = useState(0)
-  const [simulationSpeed, setSimulationSpeed] = useState(DEFAULT_SIMULATION_SPEED)
-  const inventoryOnHand = displayInventory(state, dayPlaybackMs)
+  const connectionRef = useRef<RoomConnection | null>(null)
+  const pendingIdentityRef = useRef<IdentityDraft | null>(null)
+
+  const currentPlayer = findCurrentPlayer(room, session?.playerId ?? null)
+  const elapsedMs = currentElapsedMs(room, simulationStartAtMs, clockNowMs)
 
   useEffect(() => {
-    window.localStorage.setItem(SAVE_KEY, JSON.stringify(saveGame(state)))
-  }, [state])
+    if (currentPlayer !== null) {
+      setLocalPlan(buildPlan(currentPlayer))
+    }
+  }, [
+    currentPlayer?.id,
+    currentPlayer?.dailyPlan?.price,
+    currentPlayer?.dailyPlan?.recipe.lemons,
+    currentPlayer?.dailyPlan?.recipe.sugar,
+    currentPlayer?.dailyPlan?.recipe.ice,
+    currentPlayer?.dailyPlan?.purchases.lemons,
+    currentPlayer?.dailyPlan?.purchases.sugar,
+    currentPlayer?.dailyPlan?.purchases.ice,
+  ])
 
   useEffect(() => {
-    if (state.phase !== 'day') {
+    if (room?.phase !== 'simulating') {
+      setSimulationStartAtMs(null)
       return
     }
 
     const intervalId = window.setInterval(() => {
-      setDayPlaybackMs((current) =>
-        Math.min(current + DAY_TICK_MS * simulationSpeed, DAY_PLAYBACK_MS + DAY_TRANSITION_DELAY_MS),
-      )
-    }, DAY_TICK_MS)
+      setClockNowMs(Date.now())
+    }, 100)
 
     return () => {
       window.clearInterval(intervalId)
     }
-  }, [simulationSpeed, state.phase, state.day])
+  }, [room?.phase])
 
   useEffect(() => {
-    if (state.phase !== 'day' || dayPlaybackMs < DAY_PLAYBACK_MS + DAY_TRANSITION_DELAY_MS) {
-      return
-    }
+    const renderGameToText = (): string =>
+      JSON.stringify({
+        roomId: room?.roomId ?? null,
+        phase: room?.phase ?? 'lobby',
+        day: room?.day ?? null,
+        weather: room?.weather ?? null,
+        playerId: session?.playerId ?? null,
+        elapsedMs,
+        visibleCustomers:
+          room?.simulation?.customerEvents
+            .filter((event) => isEventVisible(event, elapsedMs))
+            .map((event) => ({
+              id: event.id,
+              targetPlayerId: event.chosenPlayerId,
+              outcome: event.outcome,
+            })) ?? [],
+      })
 
-    startTransition(() => {
-      setState((current) => (current.phase === 'day' ? applyEvening(current) : current))
-    })
-  }, [dayPlaybackMs, state.phase])
-
-  useEffect(() => {
     const appWindow = window as Window & {
       advanceTime?: (ms: number) => void
       render_game_to_text?: () => string
     }
 
     appWindow.advanceTime = (ms: number) => {
-      if (state.phase !== 'day') {
-        return
-      }
-
-      setDayPlaybackMs((current) =>
-        Math.min(
-          current + Math.max(0, Math.round(ms * simulationSpeed)),
-          DAY_PLAYBACK_MS + DAY_TRANSITION_DELAY_MS,
-        ),
-      )
+      setClockNowMs((current) => current + Math.max(0, ms))
     }
-
-    appWindow.render_game_to_text = () =>
-      JSON.stringify({
-        phase: state.phase,
-        day: state.day,
-        clock: state.phase === 'day' ? formatClockTime(playbackProgress(dayPlaybackMs)) : null,
-        potentialCustomers: state.pendingReport?.potentialCustomers ?? null,
-        visibleCustomers:
-          state.phase === 'day' && state.pendingReport !== null
-            ? state.pendingReport.customerVisits
-                .map((visit) => sceneCustomer(visit, playbackProgress(dayPlaybackMs)))
-                .filter((visit) => visit.visible)
-                .map((visit) => ({
-                  customerIndex: visit.customerIndex,
-                  outcome: visit.outcome,
-                  showIndicator: visit.showIndicator,
-                }))
-            : [],
-        money: state.money,
-        reputation: state.reputation,
-        inventory: inventoryOnHand,
-        simulationSpeed,
-      })
+    appWindow.render_game_to_text = renderGameToText
 
     return () => {
       delete appWindow.advanceTime
       delete appWindow.render_game_to_text
     }
-  }, [dayPlaybackMs, inventoryOnHand, simulationSpeed, state])
+  }, [elapsedMs, room, session?.playerId])
 
-  const resetRun = (): void => {
-    window.localStorage.removeItem(SAVE_KEY)
-    setError(null)
-    setDayPlaybackMs(0)
-    startTransition(() => {
-      setState(createNewGame())
-    })
+  function updateSession(nextSession: StoredRoomSession): void {
+    setSession(nextSession)
+    setReconnectSession(nextSession)
+    writeStoredRoomSession(nextSession)
   }
 
-  const updateSimulationSpeed = (nextValue: number): void => {
-    setSimulationSpeed(nextValue)
-  }
-
-  const runDay = (form: MorningForm): void => {
-    try {
-      setError(null)
-      setDayPlaybackMs(0)
-      startTransition(() => {
-        setState((current) => {
-          if (current.phase !== 'morning') {
-            return current
+  function createHandlers(): RoomConnectionHandlers {
+    return {
+      onMessage(message) {
+        startTransition(() => {
+          if (message.type === 'connected') {
+            const identity = pendingIdentityRef.current
+            if (identity !== null) {
+              updateSession({
+                roomId: message.roomId,
+                playerId: message.playerId,
+                name: identity.name,
+                factionId: identity.factionId,
+                hostPlayerId: message.hostPlayerId,
+              })
+            }
+            return
           }
 
-          const prepared = setStrategy(
-            buyIngredients(current, form.purchases),
-            {
-              recipe: form.recipe,
-              price: form.price,
-            },
-          )
+          if (message.type === 'room_state') {
+            setRoom(message.room)
+            setError(null)
 
-          return resolveDay(prepared)
+            if (session !== null) {
+              updateSession({
+                ...session,
+                roomId: message.room.roomId,
+                hostPlayerId: message.room.hostPlayerId,
+              })
+            }
+            return
+          }
+
+          if (message.type === 'simulation_started') {
+            const simulationMessage = message as SimulationStartedMessage
+            setRoom(simulationMessage.room)
+            setSimulationStartAtMs(simulationMessage.simulationStartAt)
+            setClockNowMs(Date.now())
+            setError(null)
+            return
+          }
+
+          setError(message.message)
         })
-      })
-    } catch (caughtError) {
-      setError(caughtError instanceof Error ? caughtError.message : 'Could not run the day.')
+      },
+      onClose() {
+        setError((current) => current ?? 'The room connection closed.')
+      },
+      onError(message) {
+        setError(message)
+      },
     }
   }
 
-  const openShop = (): void => {
+  function connectAndSend(message: ClientMessage, identity: IdentityDraft): void {
+    pendingIdentityRef.current = identity
     setError(null)
-    startTransition(() => {
-      setState((current) => generateDraft(current))
+    connectionRef.current?.close()
+    connectionRef.current = openRoomConnection(createHandlers())
+    connectionRef.current.send(message)
+  }
+
+  function hostRoom(): void {
+    if (lobbyForm.name.trim() === '') {
+      setError('Enter your name before hosting a room.')
+      return
+    }
+
+    connectAndSend(
+      {
+        type: 'create_room',
+        name: lobbyForm.name,
+        faction: factionDefinition(lobbyForm.factionId),
+      },
+      {
+        name: lobbyForm.name,
+        factionId: lobbyForm.factionId,
+      },
+    )
+  }
+
+  function joinRoomFlow(playerId?: string, factionId = DEFAULT_JOIN_FACTION): void {
+    if (lobbyForm.name.trim() === '' && playerId === undefined) {
+      setError('Enter your name before joining a room.')
+      return
+    }
+    if (lobbyForm.roomId.trim() === '') {
+      setError('Enter a room id before joining.')
+      return
+    }
+
+    connectAndSend(
+      {
+        type: 'join_room',
+        roomId: lobbyForm.roomId.trim().toUpperCase(),
+        name: lobbyForm.name,
+        faction: factionDefinition(factionId),
+        playerId,
+      },
+      {
+        name: lobbyForm.name,
+        factionId,
+      },
+    )
+  }
+
+  function reconnectToRoom(): void {
+    if (reconnectSession === null) {
+      return
+    }
+
+    setLobbyForm((current) => ({
+      ...current,
+      name: reconnectSession.name,
+      roomId: reconnectSession.roomId,
+      factionId: reconnectSession.factionId,
+    }))
+    connectAndSend(
+      {
+        type: 'join_room',
+        roomId: reconnectSession.roomId,
+        name: reconnectSession.name,
+        faction: factionDefinition(reconnectSession.factionId),
+        playerId: reconnectSession.playerId,
+      },
+      {
+        name: reconnectSession.name,
+        factionId: reconnectSession.factionId,
+      },
+    )
+  }
+
+  function lockInPlan(): void {
+    if (room === null || session === null) {
+      return
+    }
+
+    connectionRef.current?.send({
+      type: 'submit_plan',
+      roomId: room.roomId,
+      playerId: session.playerId,
+      plan: localPlan,
     })
   }
 
-  const chooseCard = (cardId: CardId): void => {
-    setError(null)
-    startTransition(() => {
-      setState((current) => pickCard(current, cardId))
+  function requestNextDay(): void {
+    if (room === null || session === null) {
+      return
+    }
+
+    connectionRef.current?.send({
+      type: 'request_next_day',
+      roomId: room.roomId,
+      playerId: session.playerId,
     })
   }
-
-  const passTonight = (): void => {
-    setError(null)
-    startTransition(() => {
-      setState((current) => skipDraft(current))
-    })
-  }
-
-  const restart = (): void => {
-    setError(null)
-    startTransition(() => {
-      setState(createNewGame())
-    })
-  }
-
-  const lastReport = state.lastReport
 
   return (
     <main className="app-shell">
-      <header className="hero-banner">
-        <div className="hero-copy">
-          <p className="eyebrow">Lemonade Stand</p>
-          <h1>Grow your citrus empire.</h1>
+      <header className="topbar">
+        <div>
+          <p className="eyebrow">Shared Market</p>
+          <strong className="topbar-title">Lemonade Stand LAN</strong>
         </div>
-        <div className="hero-metrics">
-          <MetricCard label="Day" value={`${state.day}`} accent />
-          <MetricCard label="Money" value={formatMoney(state.money)} />
-          <MetricCard label="Rent" value={formatMoney(state.rent)} />
-          <MetricCard label="Rent Due In" value={`${state.rentTimer} day(s)`} />
-          <MetricCard label="Reputation" value={`${state.reputation}`} />
-          <MetricCard label="Forecast" value={weatherLabel(state)} />
-        </div>
+        {room !== null ? (
+          <div className="topbar-metrics">
+            <span className="summary-chip">Room {room.roomId}</span>
+            <span className="summary-chip">Day {room.day}</span>
+            <span className="summary-chip">{weatherLabel(room)}</span>
+          </div>
+        ) : null}
       </header>
 
-      <section className="dashboard-grid">
-        <div className="main-column">
-          {state.phase === 'morning' ? (
-            <MorningScreen key={`morning-${state.day}`} state={state} onRunDay={runDay} error={error} />
-          ) : null}
-          {state.phase === 'day' ? <DayScreen state={state} playbackMs={dayPlaybackMs} /> : null}
-          {state.phase === 'evening' && lastReport !== null ? (
-            <EveningScreen report={lastReport} history={state.history} onOpenShop={openShop} />
-          ) : null}
-          {state.phase === 'night' ? (
-            <NightScreen state={state} onPick={chooseCard} onSkip={passTonight} />
-          ) : null}
-          {state.phase === 'gameOver' ? <GameOverScreen state={state} onRestart={restart} /> : null}
-        </div>
-
-        <aside className="side-column">
-          {IS_DEV ? (
-            <DevToolsPanel
-              simulationSpeed={simulationSpeed}
-              onSimulationSpeedChange={updateSimulationSpeed}
-              onResetRun={resetRun}
-            />
-          ) : null}
-          <section className="panel">
-            <p className="eyebrow">Inventory</p>
-            <h3>What&apos;s on hand</h3>
-            <div className="market-grid">
-              <MetricCard label="Lemons" value={`${inventoryOnHand.lemons}`} />
-              <MetricCard label="Sugar" value={`${inventoryOnHand.sugar}`} />
-              <MetricCard label="Ice" value={`${inventoryOnHand.ice}`} />
-            </div>
-          </section>
-          <ActiveCardsPanel state={state} />
-          <HintList />
-        </aside>
-      </section>
+      {session !== null && (room === null || room.phase === 'lobby') ? (
+        <WaitingScreen roomId={room?.roomId ?? session.roomId} />
+      ) : null}
+      {room === null ? (
+        <LobbyScreen
+          form={lobbyForm}
+          reconnectSession={reconnectSession}
+          error={error}
+          onChange={(next) => setLobbyForm((current) => ({ ...current, ...next }))}
+          onHost={hostRoom}
+          onJoin={() => joinRoomFlow(undefined, lobbyForm.factionId)}
+          onReconnect={reconnectToRoom}
+        />
+      ) : null}
+      {room?.phase === 'planning' && currentPlayer !== null ? (
+        <PlanningScreen
+          room={room}
+          currentPlayer={currentPlayer}
+          localPlan={localPlan}
+          error={error}
+          onPlanChange={setLocalPlan}
+          onLockIn={lockInPlan}
+        />
+      ) : null}
+      {room?.phase === 'simulating' ? <SimulationScreen room={room} elapsedMs={elapsedMs} /> : null}
+      {room?.phase === 'results' ? (
+        <ResultsScreen
+          room={room}
+          currentPlayerId={session?.playerId ?? null}
+          onNextDay={requestNextDay}
+        />
+      ) : null}
+      {room?.phase === 'paused' ? <PausedScreen room={room} /> : null}
     </main>
   )
 }

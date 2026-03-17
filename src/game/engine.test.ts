@@ -1,388 +1,268 @@
 import { describe, expect, it } from 'vitest'
 
+import { defaultBalanceConfig } from './balance'
 import {
-  applyEvening,
-  buyIngredients,
-  calculateSellableCups,
-  createNewGame,
-  loadGame,
-  refreshMorningMarket,
-  resolveDay,
-  saveGame,
-  setStrategy,
+  beginNextDay,
+  calculateStandScore,
+  createRoom,
+  customerCountForWeather,
+  enterResultsPhase,
+  joinRoom,
+  roomCanStartSimulation,
+  setPlayerReady,
+  startSimulation,
+  updatePlayerPlan,
 } from './engine'
-import type { DailyMarket, GameState, Inventory, Recipe } from './types'
+import type { RoomState } from './types'
 
-const TEST_MARKET: DailyMarket = {
-  lemons: 0.5,
-  sugar: 0.2,
-  ice: 0.1,
-}
-
-function prepareState(partial: Partial<GameState> = {}): GameState {
-  const base = createNewGame({ seed: 12345 })
-  return refreshMorningMarket({
-    ...base,
-    money: partial.money ?? 200,
-    ...partial,
-    inventory: {
-      ...base.inventory,
-      ...partial.inventory,
+function createPlanningRoom(seed = 42): RoomState {
+  return joinRoom(
+    createRoom({
+      roomId: 'ROOM-42',
+      hostPlayerId: 'player-host',
+      hostPlayerName: 'Alex',
+      hostSessionId: 'session-host',
+      hostFactionId: 'sun-guild',
+      seed,
+    }),
+    {
+      playerId: 'player-guest',
+      playerName: 'Blair',
+      sessionId: 'session-guest',
+      factionId: 'market-tide',
     },
-    market: partial.market ?? TEST_MARKET,
-    plan: {
-      ...base.plan,
-      ...partial.plan,
-    },
-    activeCards: partial.activeCards ?? base.activeCards,
-    draftOptions: partial.draftOptions ?? base.draftOptions,
-    lastReport: partial.lastReport ?? base.lastReport,
-    previousRecipe: partial.previousRecipe ?? base.previousRecipe,
-    history: partial.history ?? base.history,
-    rng: partial.rng ?? base.rng,
-  })
-}
-
-function runToEvening(
-  state: GameState,
-  purchases: Inventory,
-  recipe: Recipe,
-  price: number,
-): GameState {
-  return applyEvening(
-    resolveDay(
-      setStrategy(
-        buyIngredients(state, purchases),
-        {
-          recipe,
-          price,
-        },
-      ),
-    ),
   )
 }
 
-function runToDay(
-  state: GameState,
-  purchases: Inventory,
-  recipe: Recipe,
-  price: number,
-): GameState {
-  return resolveDay(
-    setStrategy(
-      buyIngredients(state, purchases),
-      {
-        recipe,
-        price,
-      },
-    ),
-  )
-}
+describe('multiplayer engine', () => {
+  it('creates room defaults and enters planning once both players are present', () => {
+    const room = createPlanningRoom(7)
 
-describe('engine', () => {
-  it('creates a new game with defaults and round-trips through save/load', () => {
-    const state = createNewGame({ seed: 77 })
-
-    expect(state.phase).toBe('morning')
-    expect(state.day).toBe(1)
-    expect(state.money).toBe(20)
-    expect(state.rent).toBe(15)
-    expect(state.rentTimer).toBe(5)
-    expect(state.reputation).toBe(50)
-    expect(state.weather).toBeDefined()
-    expect(state.market).toBeDefined()
-
-    const reloaded = loadGame(saveGame(state))
-
-    expect(reloaded).toEqual(state)
+    expect(room.phase).toBe('planning')
+    expect(room.weather).not.toBeNull()
+    expect(room.marketBasePrices).not.toBeNull()
+    expect(room.players).toHaveLength(2)
+    expect(room.players[0].money).toBe(20)
+    expect(room.players[0].reputation).toBe(50)
+    expect(room.players[0].faction.id).toBe('sun-guild')
+    expect(room.players[1].faction.id).toBe('market-tide')
   })
 
-  it('buys ingredients using the daily market prices', () => {
-    const state = prepareState({
-      money: 20,
-      market: {
+  it('keeps plan updates isolated to the targeted player', () => {
+    const room = updatePlayerPlan(createPlanningRoom(), 'player-host', {
+      price: 1.1,
+      recipe: {
         lemons: 1,
-        sugar: 1.5,
-        ice: 0.25,
-      },
-    })
-
-    const next = buyIngredients(state, {
-      lemons: 2,
-      sugar: 1,
-      ice: 4,
-    })
-
-    expect(next.inventory).toEqual({
-      lemons: 2,
-      sugar: 1,
-      ice: 4,
-    })
-    expect(next.money).toBe(15.5)
-  })
-
-  it('calculates sellable cups from inventory while ignoring zero-ingredient recipe slots', () => {
-    expect(
-      calculateSellableCups(
-        {
-          lemons: 8,
-          sugar: 1,
-          ice: 12,
-        },
-        {
-          lemons: 2,
-          sugar: 0,
-          ice: 4,
-        },
-      ),
-    ).toBe(3)
-  })
-
-  it('rewards weather-matching recipes with better satisfaction and reputation', () => {
-    const matchingState = runToEvening(
-      prepareState({
-        weather: 'hot',
-      }),
-      {
-        lemons: 30,
-        sugar: 30,
-        ice: 40,
-      },
-      {
-        lemons: 2,
-        sugar: 2,
+        sugar: 3,
         ice: 4,
       },
-      1.5,
-    )
+    })
 
-    const mismatchState = runToEvening(
-      prepareState({
-        weather: 'hot',
-      }),
-      {
-        lemons: 30,
-        sugar: 30,
-        ice: 40,
-      },
-      {
-        lemons: 5,
-        sugar: 0,
-        ice: 0,
-      },
-      1.5,
-    )
+    const host = room.players.find((player) => player.id === 'player-host')
+    const guest = room.players.find((player) => player.id === 'player-guest')
 
-    expect(matchingState.lastReport?.averageSatisfaction ?? 0).toBeGreaterThan(
-      mismatchState.lastReport?.averageSatisfaction ?? 0,
-    )
-    expect(matchingState.reputation).toBeGreaterThan(mismatchState.reputation)
+    expect(host?.dailyPlan.price).toBe(1.1)
+    expect(host?.dailyPlan.recipe.ice).toBe(4)
+    expect(guest?.dailyPlan.price).toBe(defaultBalanceConfig.defaultPrice)
+    expect(guest?.dailyPlan.recipe).toEqual(defaultBalanceConfig.defaultRecipe)
   })
 
-  it('melts remaining ice while preserving leftover lemons and sugar', () => {
-    const state = runToEvening(
-      prepareState({
-        weather: 'raining',
-        reputation: 25,
-      }),
-      {
-        lemons: 20,
-        sugar: 20,
-        ice: 20,
-      },
-      {
-        lemons: 1,
-        sugar: 1,
-        ice: 1,
-      },
-      1.2,
-    )
-
-    expect(state.inventory.ice).toBe(0)
-    expect(state.inventory.lemons).toBeGreaterThan(0)
-    expect(state.inventory.sugar).toBeGreaterThan(0)
+  it('derives weather customer pools from the balance config', () => {
+    expect(customerCountForWeather('hot')).toBe(50)
+    expect(customerCountForWeather('raining')).toBe(15)
   })
 
-  it('charges rent when the timer reaches zero and increases the next rent exponentially', () => {
-    const state = runToEvening(
-      prepareState({
-        money: 40,
-        rent: 15,
-        rentTimer: 1,
-        weather: 'cloudy',
-      }),
+  it('prefers the cheaper stand when recipe and reputation match', () => {
+    const cheaper = calculateStandScore(
       {
-        lemons: 10,
-        sugar: 10,
-        ice: 10,
+        willingnessToPay: 2,
+        recipe: {
+          lemons: 2,
+          sugar: 2,
+          ice: 4,
+        },
+        price: 1.2,
+        reputation: 50,
       },
+      'hot',
+    )
+    const pricier = calculateStandScore(
       {
-        lemons: 2,
-        sugar: 2,
-        ice: 1,
+        willingnessToPay: 2,
+        recipe: {
+          lemons: 2,
+          sugar: 2,
+          ice: 4,
+        },
+        price: 1.6,
+        reputation: 50,
       },
-      1.3,
+      'hot',
     )
 
-    expect(state.lastReport?.rentTriggered).toBe(true)
-    expect(state.lastReport?.rentPaid).toBe(15)
-    expect(state.rent).toBe(23)
-    expect(state.rentTimer).toBe(5)
-    expect(state.phase).toBe('evening')
+    expect(cheaper).toBeGreaterThan(pricier)
   })
 
-  it('ends the run if money goes negative when rent is due', () => {
-    const state = runToEvening(
-      prepareState({
-        money: 5,
-        rent: 15,
-        rentTimer: 1,
-        weather: 'raining',
-      }),
+  it('prefers the better weather-fit recipe when prices are close', () => {
+    const matched = calculateStandScore(
       {
-        lemons: 0,
-        sugar: 0,
-        ice: 0,
+        willingnessToPay: 2.2,
+        recipe: {
+          lemons: 2,
+          sugar: 2,
+          ice: 4,
+        },
+        price: 1.5,
+        reputation: 50,
       },
+      'hot',
+    )
+    const mismatched = calculateStandScore(
       {
-        lemons: 1,
-        sugar: 1,
-        ice: 0,
+        willingnessToPay: 2.2,
+        recipe: {
+          lemons: 4,
+          sugar: 4,
+          ice: 0,
+        },
+        price: 1.45,
+        reputation: 50,
       },
-      5,
+      'hot',
     )
 
-    expect(state.phase).toBe('gameOver')
-    expect(state.money).toBeLessThan(0)
-    expect(state.lastReport?.rentTriggered).toBe(true)
+    expect(matched).toBeGreaterThan(mismatched)
   })
 
-  it('resolves deterministically from the same seed and decisions', () => {
-    const first = runToEvening(
-      createNewGame({ seed: 501 }),
+  it('allows reputation to overcome a small price disadvantage', () => {
+    const trusted = calculateStandScore(
       {
-        lemons: 24,
-        sugar: 24,
-        ice: 24,
+        willingnessToPay: 2.1,
+        recipe: {
+          lemons: 2,
+          sugar: 2,
+          ice: 2,
+        },
+        price: 1.5,
+        reputation: 90,
       },
+      'sunny',
+    )
+    const bargain = calculateStandScore(
       {
-        lemons: 2,
-        sugar: 2,
-        ice: 2,
+        willingnessToPay: 2.1,
+        recipe: {
+          lemons: 2,
+          sugar: 2,
+          ice: 2,
+        },
+        price: 1.4,
+        reputation: 30,
       },
-      1.4,
+      'sunny',
     )
 
-    const second = runToEvening(
-      createNewGame({ seed: 501 }),
-      {
-        lemons: 24,
-        sugar: 24,
-        ice: 24,
-      },
-      {
-        lemons: 2,
-        sugar: 2,
-        ice: 2,
-      },
-      1.4,
-    )
-
-    expect(second.lastReport).toEqual(first.lastReport)
-    expect(second.money).toBe(first.money)
-    expect(second.reputation).toBe(first.reputation)
-    expect(second.inventory).toEqual(first.inventory)
-    expect(second.rng).toEqual(first.rng)
+    expect(trusted).toBeGreaterThan(bargain)
   })
 
-  it('records one customer visit per potential customer in the pending day report', () => {
-    const state = runToDay(
-      prepareState({
-        weather: 'sunny',
-        reputation: 58,
-      }),
+  it('returns zero when the price exceeds willingness to pay', () => {
+    const score = calculateStandScore(
       {
-        lemons: 24,
-        sugar: 24,
-        ice: 24,
+        willingnessToPay: 1.25,
+        recipe: {
+          lemons: 2,
+          sugar: 2,
+          ice: 2,
+        },
+        price: 1.5,
+        reputation: 50,
       },
-      {
-        lemons: 2,
-        sugar: 2,
-        ice: 2,
-      },
-      1.4,
+      'sunny',
     )
 
-    expect(state.phase).toBe('day')
-    expect(state.pendingReport?.customerVisits).toHaveLength(state.pendingReport?.potentialCustomers ?? 0)
+    expect(score).toBe(0)
   })
 
-  it('creates deterministic, ordered arrival progress for customer visits', () => {
-    const first = runToDay(
-      createNewGame({ seed: 321 }),
-      {
-        lemons: 20,
-        sugar: 20,
-        ice: 20,
-      },
-      {
+  it('resolves ties deterministically from the room seed', () => {
+    const readyFirst = setPlayerReady(
+      setPlayerReady(createPlanningRoom(123), 'player-host', true),
+      'player-guest',
+      true,
+    )
+    const readySecond = setPlayerReady(
+      setPlayerReady(createPlanningRoom(123), 'player-host', true),
+      'player-guest',
+      true,
+    )
+
+    expect(roomCanStartSimulation(readyFirst)).toBe(true)
+
+    const first = startSimulation(readyFirst)
+    const second = startSimulation(readySecond)
+
+    expect(first.simulation?.events).toEqual(second.simulation?.events)
+    expect(first.players.map((player) => player.dailyResults)).toEqual(
+      second.players.map((player) => player.dailyResults),
+    )
+  })
+
+  it('prevents overselling when a winning stand runs out of inventory', () => {
+    let room = createPlanningRoom(5)
+    room = updatePlayerPlan(room, 'player-host', {
+      purchases: {
         lemons: 2,
         sugar: 2,
         ice: 2,
       },
-      1.5,
-    )
-    const second = runToDay(
-      createNewGame({ seed: 321 }),
-      {
-        lemons: 20,
-        sugar: 20,
-        ice: 20,
-      },
-      {
+      recipe: {
         lemons: 2,
         sugar: 2,
         ice: 2,
       },
-      1.5,
-    )
+      price: 0.5,
+    })
+    room = updatePlayerPlan(room, 'player-guest', {
+      price: 3,
+    })
+    room = setPlayerReady(setPlayerReady(room, 'player-host', true), 'player-guest', true)
 
-    const arrivals = first.pendingReport?.customerVisits.map((visit) => visit.arrivalProgress) ?? []
+    const simulated = startSimulation(room)
+    const host = simulated.players.find((player) => player.id === 'player-host')
 
-    expect(second.pendingReport?.customerVisits).toEqual(first.pendingReport?.customerVisits)
-    expect(arrivals.every((arrival) => arrival >= 0 && arrival <= 1)).toBe(true)
-    expect(arrivals.every((arrival, index) => index === 0 || arrival >= arrivals[index - 1])).toBe(true)
+    expect(host?.dailyResults.cupsSold).toBe(1)
+    expect(host?.dailyResults.customersSoldOut).toBeGreaterThan(0)
   })
 
-  it('keeps customer visit outcomes aligned with the aggregate report totals', () => {
-    const state = runToDay(
-      prepareState({
-        weather: 'hot',
-        reputation: 62,
-      }),
-      {
+  it('carries money, inventory, and reputation into the next planning day', () => {
+    let room = createPlanningRoom(91)
+    room = updatePlayerPlan(room, 'player-host', {
+      purchases: {
         lemons: 6,
         sugar: 6,
         ice: 6,
       },
-      {
-        lemons: 2,
-        sugar: 2,
-        ice: 2,
+      price: 1.1,
+    })
+    room = updatePlayerPlan(room, 'player-guest', {
+      purchases: {
+        lemons: 6,
+        sugar: 6,
+        ice: 6,
       },
-      1.1,
-    )
+      price: 1.2,
+    })
+    room = setPlayerReady(setPlayerReady(room, 'player-host', true), 'player-guest', true)
 
-    const visits = state.pendingReport?.customerVisits ?? []
-    const bought = visits.filter((visit) => visit.outcome === 'buy')
-    const soldOut = visits.filter((visit) => visit.outcome === 'soldOut')
-    const skipped = visits.filter((visit) => visit.outcome === 'skip')
+    const simulated = startSimulation(room)
+    const nextDay = beginNextDay(enterResultsPhase(simulated))
+    const host = nextDay.players.find((player) => player.id === 'player-host')
 
-    expect(bought).toHaveLength(state.pendingReport?.cupsSold ?? 0)
-    expect(soldOut).toHaveLength(state.pendingReport?.turnedAway ?? 0)
-    expect(skipped).toHaveLength(
-      (state.pendingReport?.potentialCustomers ?? 0) - (state.pendingReport?.cupsSold ?? 0) - (state.pendingReport?.turnedAway ?? 0),
-    )
+    expect(nextDay.phase).toBe('planning')
+    expect(nextDay.day).toBe(2)
+    expect(nextDay.weather).not.toBeNull()
+    expect(nextDay.marketBasePrices).not.toBeNull()
+    expect(host?.money).not.toBe(defaultBalanceConfig.startingMoney)
+    expect(host?.dailyResults.cupsSold).toBe(0)
+    expect(host?.isReady).toBe(false)
   })
 })
