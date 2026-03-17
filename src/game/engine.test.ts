@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest'
 import { defaultBalanceConfig } from './balance'
 import {
   beginNextDay,
+  calculateSellableCups,
+  calculateSatisfactionScore,
   calculateStandScore,
   createRoom,
   customerCountForWeather,
@@ -65,6 +67,59 @@ describe('multiplayer engine', () => {
     expect(host?.dailyPlan.recipe.ice).toBe(4)
     expect(guest?.dailyPlan.price).toBe(defaultBalanceConfig.defaultPrice)
     expect(guest?.dailyPlan.recipe).toEqual(defaultBalanceConfig.defaultRecipe)
+  })
+
+  it('clamps lemons and sugar to a positive decimal while allowing ice to reach zero', () => {
+    const room = updatePlayerPlan(createPlanningRoom(), 'player-host', {
+      recipe: {
+        lemons: 0,
+        sugar: 0,
+        ice: 0,
+      },
+    })
+
+    const host = room.players.find((player) => player.id === 'player-host')
+
+    expect(host?.dailyPlan.recipe).toEqual({
+      lemons: 0.1,
+      sugar: 0.1,
+      ice: 0,
+    })
+  })
+
+  it('preserves fractional recipe values when they stay above the minimum', () => {
+    const room = updatePlayerPlan(createPlanningRoom(), 'player-host', {
+      recipe: {
+        lemons: 0.5,
+        sugar: 0.3,
+        ice: 1.2,
+      },
+    })
+
+    const host = room.players.find((player) => player.id === 'player-host')
+
+    expect(host?.dailyPlan.recipe).toEqual({
+      lemons: 0.5,
+      sugar: 0.3,
+      ice: 1.2,
+    })
+  })
+
+  it('calculates sellable cups correctly for fractional recipes', () => {
+    expect(
+      calculateSellableCups(
+        {
+          lemons: 0.3,
+          sugar: 0.3,
+          ice: 0,
+        },
+        {
+          lemons: 0.1,
+          sugar: 0.1,
+          ice: 0,
+        },
+      ),
+    ).toBe(3)
   })
 
   it('derives weather customer pools from the balance config', () => {
@@ -183,6 +238,10 @@ describe('multiplayer engine', () => {
     expect(score).toBe(0)
   })
 
+  it('applies a quadratic falloff to satisfaction for recipe fit and price', () => {
+    expect(calculateSatisfactionScore(0.5, 1, 2)).toBe(0.25)
+  })
+
   it('resolves ties deterministically from the room seed', () => {
     const readyFirst = setPlayerReady(
       setPlayerReady(createPlanningRoom(123), 'player-host', true),
@@ -232,20 +291,28 @@ describe('multiplayer engine', () => {
           sugar: 0.2,
           ice: 0.1,
         },
+        players: room.players.map((player) => ({
+          ...player,
+          inventory: {
+            lemons: 200,
+            sugar: 200,
+            ice: 0,
+          },
+        })),
       }
       room = updatePlayerPlan(room, 'player-host', {
         price: 1.45,
         recipe: {
-          lemons: 0,
-          sugar: 0,
+          lemons: 1,
+          sugar: 1,
           ice: 0,
         },
       })
       room = updatePlayerPlan(room, 'player-guest', {
         price: 1.5,
         recipe: {
-          lemons: 0,
-          sugar: 0,
+          lemons: 1,
+          sugar: 1,
           ice: 0,
         },
       })

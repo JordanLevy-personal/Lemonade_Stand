@@ -10,6 +10,7 @@ import {
   calculatePurchaseCost,
   calculateSellableCups,
   emptyInventory,
+  sanitizeRecipe,
 } from './game/engine'
 import type { DailyPlan, Inventory, Recipe } from './game/types'
 import type {
@@ -25,6 +26,8 @@ export const ROOM_SESSION_KEY = 'lemonade-stand-room-session-v1'
 
 const DEFAULT_HOST_FACTION = 'sun-guild'
 const DEFAULT_JOIN_FACTION = 'market-tide'
+const RECIPE_STEP = 0.1
+const INVENTORY_PRECISION = 1
 
 interface StoredRoomSession {
   roomId: string
@@ -99,27 +102,41 @@ function clamp(value: number, minimum: number, maximum: number): number {
   return Math.max(minimum, Math.min(maximum, value))
 }
 
+function roundToPrecision(value: number, precision: number): number {
+  const factor = 10 ** precision
+  return Math.round(value * factor) / factor
+}
+
 function addInventory(left: Inventory, right: Inventory): Inventory {
   return {
-    lemons: left.lemons + right.lemons,
-    sugar: left.sugar + right.sugar,
-    ice: left.ice + right.ice,
+    lemons: roundToPrecision(left.lemons + right.lemons, INVENTORY_PRECISION),
+    sugar: roundToPrecision(left.sugar + right.sugar, INVENTORY_PRECISION),
+    ice: roundToPrecision(left.ice + right.ice, INVENTORY_PRECISION),
   }
 }
 
 function subtractRecipe(inventory: Inventory, recipe: Recipe, count: number): Inventory {
   return {
-    lemons: Math.max(0, inventory.lemons - recipe.lemons * count),
-    sugar: Math.max(0, inventory.sugar - recipe.sugar * count),
-    ice: Math.max(0, inventory.ice - recipe.ice * count),
+    lemons: roundToPrecision(
+      Math.max(0, inventory.lemons - recipe.lemons * count),
+      INVENTORY_PRECISION,
+    ),
+    sugar: roundToPrecision(
+      Math.max(0, inventory.sugar - recipe.sugar * count),
+      INVENTORY_PRECISION,
+    ),
+    ice: roundToPrecision(
+      Math.max(0, inventory.ice - recipe.ice * count),
+      INVENTORY_PRECISION,
+    ),
   }
 }
 
 function addRecipe(inventory: Inventory, recipe: Recipe, count: number): Inventory {
   return {
-    lemons: inventory.lemons + recipe.lemons * count,
-    sugar: inventory.sugar + recipe.sugar * count,
-    ice: inventory.ice + recipe.ice * count,
+    lemons: roundToPrecision(inventory.lemons + recipe.lemons * count, INVENTORY_PRECISION),
+    sugar: roundToPrecision(inventory.sugar + recipe.sugar * count, INVENTORY_PRECISION),
+    ice: roundToPrecision(inventory.ice + recipe.ice * count, INVENTORY_PRECISION),
   }
 }
 
@@ -263,7 +280,7 @@ function buildPlan(currentPlayer: ReturnType<typeof findCurrentPlayer>): DailyPl
 
   return {
     purchases: { ...currentPlayer.dailyPlan.purchases },
-    recipe: { ...currentPlayer.dailyPlan.recipe },
+    recipe: sanitizeRecipe(currentPlayer.dailyPlan.recipe),
     price: currentPlayer.dailyPlan.price,
   }
 }
@@ -566,22 +583,24 @@ function PlanningScreen({
             <NumberField
               label="Lemons per Cup"
               value={localPlan.recipe.lemons}
-              min={0}
+              min={RECIPE_STEP}
+              step={RECIPE_STEP}
               onChange={(lemons) =>
                 onPlanChange({
                   ...localPlan,
-                  recipe: { ...localPlan.recipe, lemons },
+                  recipe: sanitizeRecipe({ ...localPlan.recipe, lemons }),
                 })
               }
             />
             <NumberField
               label="Sugar per Cup"
               value={localPlan.recipe.sugar}
-              min={0}
+              min={RECIPE_STEP}
+              step={RECIPE_STEP}
               onChange={(sugar) =>
                 onPlanChange({
                   ...localPlan,
-                  recipe: { ...localPlan.recipe, sugar },
+                  recipe: sanitizeRecipe({ ...localPlan.recipe, sugar }),
                 })
               }
             />
@@ -589,10 +608,11 @@ function PlanningScreen({
               label="Ice per Cup"
               value={localPlan.recipe.ice}
               min={0}
+              step={RECIPE_STEP}
               onChange={(ice) =>
                 onPlanChange({
                   ...localPlan,
-                  recipe: { ...localPlan.recipe, ice },
+                  recipe: sanitizeRecipe({ ...localPlan.recipe, ice }),
                 })
               }
             />
@@ -1000,11 +1020,16 @@ function App(): JSX.Element {
       return
     }
 
+    const plan = {
+      ...localPlan,
+      recipe: sanitizeRecipe(localPlan.recipe),
+    }
+
     connectionRef.current?.send({
       type: 'submit_plan',
       roomId: room.roomId,
       playerId: session.playerId,
-      plan: localPlan,
+      plan,
     })
   }
 

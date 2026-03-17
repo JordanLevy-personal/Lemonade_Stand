@@ -13,8 +13,18 @@ import type {
   Weather,
 } from './types'
 
+const MIN_PRIMARY_RECIPE_INGREDIENT = 0.1
+const RECIPE_PRECISION = 1
+const INVENTORY_EPSILON = 1e-9
+const SATISFACTION_CURVE_EXPONENT = 2
+
 function roundMoney(value: number): number {
   return Math.round(value * 100) / 100
+}
+
+function roundToPrecision(value: number, precision: number): number {
+  const factor = 10 ** precision
+  return Math.round(value * factor) / factor
 }
 
 function clamp(value: number, minimum: number, maximum: number): number {
@@ -51,32 +61,40 @@ function cloneInventory(inventory: Inventory): Inventory {
 
 function addInventory(left: Inventory, right: Inventory): Inventory {
   return {
-    lemons: left.lemons + right.lemons,
-    sugar: left.sugar + right.sugar,
-    ice: left.ice + right.ice,
+    lemons: roundToPrecision(left.lemons + right.lemons, RECIPE_PRECISION),
+    sugar: roundToPrecision(left.sugar + right.sugar, RECIPE_PRECISION),
+    ice: roundToPrecision(left.ice + right.ice, RECIPE_PRECISION),
   }
 }
 
 function subtractInventory(left: Inventory, recipe: Recipe): Inventory {
   return {
-    lemons: Math.max(0, left.lemons - recipe.lemons),
-    sugar: Math.max(0, left.sugar - recipe.sugar),
-    ice: Math.max(0, left.ice - recipe.ice),
+    lemons: roundToPrecision(Math.max(0, left.lemons - recipe.lemons), RECIPE_PRECISION),
+    sugar: roundToPrecision(Math.max(0, left.sugar - recipe.sugar), RECIPE_PRECISION),
+    ice: roundToPrecision(Math.max(0, left.ice - recipe.ice), RECIPE_PRECISION),
   }
 }
 
-function roundRecipe(recipe: Recipe): Recipe {
+export function sanitizeRecipe(recipe: Recipe): Recipe {
   return {
-    lemons: clamp(Math.round(recipe.lemons), 0, 5),
-    sugar: clamp(Math.round(recipe.sugar), 0, 5),
-    ice: clamp(Math.round(recipe.ice), 0, 5),
+    lemons: clamp(
+      roundToPrecision(recipe.lemons, RECIPE_PRECISION),
+      MIN_PRIMARY_RECIPE_INGREDIENT,
+      5,
+    ),
+    sugar: clamp(
+      roundToPrecision(recipe.sugar, RECIPE_PRECISION),
+      MIN_PRIMARY_RECIPE_INGREDIENT,
+      5,
+    ),
+    ice: clamp(roundToPrecision(recipe.ice, RECIPE_PRECISION), 0, 5),
   }
 }
 
 function createDailyPlan(balance: BalanceConfig, current?: Partial<DailyPlan>): DailyPlan {
   return {
     purchases: current?.purchases ? cloneInventory(current.purchases) : emptyInventory(),
-    recipe: current?.recipe ? roundRecipe(current.recipe) : balance.defaultRecipe,
+    recipe: current?.recipe ? sanitizeRecipe(current.recipe) : balance.defaultRecipe,
     price:
       current?.price === undefined
         ? balance.defaultPrice
@@ -308,7 +326,9 @@ export function disconnectPlayer(room: RoomState, playerId: string): RoomState {
 export function calculateSellableCups(inventory: Inventory, recipe: Recipe): number {
   const capacities = (['lemons', 'sugar', 'ice'] as const)
     .filter((ingredient) => recipe[ingredient] > 0)
-    .map((ingredient) => Math.floor(inventory[ingredient] / recipe[ingredient]))
+    .map((ingredient) =>
+      Math.floor((inventory[ingredient] + INVENTORY_EPSILON) / recipe[ingredient]),
+    )
 
   if (capacities.length === 0) {
     return Number.POSITIVE_INFINITY
@@ -357,6 +377,10 @@ function priceScore(price: number, willingnessToPay: number): number {
   }
 
   return clamp(1 - price / Math.max(willingnessToPay, 0.25), 0, 1)
+}
+
+function curveScore(score: number): number {
+  return clamp(score, 0, 1) ** SATISFACTION_CURVE_EXPONENT
 }
 
 export function calculateStandScore(
@@ -505,8 +529,16 @@ function chooseWinner(
   return [fallbackWinner?.playerId ?? null, { ...room, rng }]
 }
 
-function satisfactionScore(recipeFit: number, price: number, willingnessToPay: number): number {
-  return Number((recipeFit * 0.7 + priceScore(price, willingnessToPay) * 0.3).toFixed(4))
+export function calculateSatisfactionScore(
+  recipeFit: number,
+  price: number,
+  willingnessToPay: number,
+): number {
+  return Number(
+    (
+      curveScore(recipeFit) * 0.7 + curveScore(priceScore(price, willingnessToPay)) * 0.3
+    ).toFixed(4),
+  )
 }
 
 function finalizePlayers(room: RoomState, satisfactionTotals: Map<string, number>, balance: BalanceConfig): PlayerState[] {
@@ -656,7 +688,11 @@ export function startSimulation(
     }
 
     const recipeFit = calculateRecipeFit(chosenPlayer.dailyPlan.recipe, room.weather, balance)
-    const satisfaction = satisfactionScore(recipeFit, chosenPlayer.dailyPlan.price, willingnessToPay)
+    const satisfaction = calculateSatisfactionScore(
+      recipeFit,
+      chosenPlayer.dailyPlan.price,
+      willingnessToPay,
+    )
     satisfactionTotals.set(winnerId, (satisfactionTotals.get(winnerId) ?? 0) + satisfaction)
 
     nextRoom = {
