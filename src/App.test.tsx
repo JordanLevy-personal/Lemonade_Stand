@@ -250,6 +250,106 @@ describe('App', () => {
     })
   })
 
+  it('blocks zero lemons and sugar in submitted recipes while allowing zero ice', () => {
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'room_state',
+      room: createRoom(),
+    })
+
+    fireEvent.change(screen.getByLabelText(/^Lemons per Cup$/i), {
+      target: { value: '0' },
+    })
+    fireEvent.change(screen.getByLabelText(/^Sugar per Cup$/i), {
+      target: { value: '0' },
+    })
+    fireEvent.change(screen.getByLabelText(/^Ice per Cup$/i), {
+      target: { value: '0' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /lock in plan/i }))
+
+    expect(sendMock).toHaveBeenLastCalledWith({
+      type: 'submit_plan',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      plan: {
+        purchases: {
+          lemons: 1,
+          sugar: 1,
+          ice: 1,
+        },
+        recipe: {
+          lemons: 0.1,
+          sugar: 0.1,
+          ice: 0,
+        },
+        price: 1.4,
+      },
+    })
+  })
+
+  it('submits fractional recipe values without rounding them up to whole numbers', () => {
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'room_state',
+      room: createRoom(),
+    })
+
+    fireEvent.change(screen.getByLabelText(/^Lemons per Cup$/i), {
+      target: { value: '0.5' },
+    })
+    fireEvent.change(screen.getByLabelText(/^Sugar per Cup$/i), {
+      target: { value: '0.3' },
+    })
+    fireEvent.change(screen.getByLabelText(/^Ice per Cup$/i), {
+      target: { value: '1.2' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /lock in plan/i }))
+
+    expect(sendMock).toHaveBeenLastCalledWith({
+      type: 'submit_plan',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      plan: {
+        purchases: {
+          lemons: 1,
+          sugar: 1,
+          ice: 1,
+        },
+        recipe: {
+          lemons: 0.5,
+          sugar: 0.3,
+          ice: 1.2,
+        },
+        price: 1.4,
+      },
+    })
+  })
+
   it('shows inventory projection and ingredient cost during planning', () => {
     render(<App />)
 

@@ -27,3 +27,21 @@ Original prompt: ok lets add a quick feature for computing the amount of cups th
 - First browser pass exposed a runtime `dailyPlan: null` integration gap from the real server lobby state; hardened the client to accept lobby room-state and render an explicit waiting screen.
 - Re-ran targeted App tests, the full Vitest suite, a production build, a direct Playwright browser sanity script, and the Playwright screenshot loop after the fix.
 - Final browser snapshot now shows the live host waiting screen with room code and no console/page errors.
+
+## 2026-03-17 15:15:14 PDT
+
+- Started a new task workspace at `tasks/recipe-minimum-validation/` for a planning-phase validation fix.
+- Inspected the engine and client recipe handling paths and confirmed satisfaction currently uses a linear recipe-fit average combined with price sensitivity.
+- Planned the work in TDD order: add failing recipe-minimum tests first, then clamp lemons/sugar to at least `1` while keeping ice allowed at `0`.
+
+## 2026-03-17 15:19:26 PDT
+
+- Added failing engine and App tests for the new recipe minimum behavior, then implemented a shared `sanitizeRecipe` path so lemons and sugar cannot drop below `1` while ice can still be `0`.
+- Updated the planning UI to enforce the same minimums locally and sanitize the submitted plan payload before it reaches the server.
+- Validation passed with targeted Vitest coverage, the full Vitest suite, a production build, and a Playwright browser sanity pass against the live LAN app with artifacts in `output/web-game/recipe-minimum-validation/`.
+
+## 2026-03-17 15:31:30 PDT
+
+- Refined the recipe rule to support fractional ingredients by changing lemons and sugar to a `0.1` minimum instead of forcing whole-number `1`, while preserving decimal recipe entries above that floor.
+- Hardened fractional inventory math so sellable-cup calculations stay correct with decimal recipes and repeated subtraction does not drift from float precision noise.
+- Rebalanced satisfaction to use a quadratic curve over recipe fit and price score, making low and middling values fall off faster while leaving stand-choice scoring unchanged for now.
