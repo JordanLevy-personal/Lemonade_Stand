@@ -8,6 +8,9 @@ import { getCardDefinition } from './game/cards'
 import {
   applyEvening,
   buyIngredients,
+  calculateInventoryAfterSales,
+  calculateOpeningInventory,
+  calculateSellableCups,
   createNewGame,
   generateDraft,
   loadGame,
@@ -61,6 +64,14 @@ function emptyInventory(): Inventory {
     lemons: 0,
     sugar: 0,
     ice: 0,
+  }
+}
+
+function addInventories(left: Inventory, right: Inventory): Inventory {
+  return {
+    lemons: left.lemons + right.lemons,
+    sugar: left.sugar + right.sugar,
+    ice: left.ice + right.ice,
   }
 }
 
@@ -231,6 +242,44 @@ function formatSimulationSpeed(value: number): string {
   return `${value}x`
 }
 
+function formatCupCapacity(count: number): string {
+  if (!Number.isFinite(count)) {
+    return 'Unlimited'
+  }
+
+  return `${count} cup${count === 1 ? '' : 's'}`
+}
+
+function formatCupDelta(current: number, projected: number): string {
+  if (!Number.isFinite(projected)) {
+    return Number.isFinite(current) ? 'Unlimited after shopping' : 'Still unlimited'
+  }
+
+  if (!Number.isFinite(current)) {
+    return 'Already unlimited'
+  }
+
+  const delta = Math.max(0, projected - current)
+  return delta === 0 ? 'No extra cups' : `+${formatCupCapacity(delta)}`
+}
+
+function displayInventory(state: GameState, playbackMs: number): Inventory {
+  if (state.phase !== 'day' || state.pendingReport === null) {
+    return state.inventory
+  }
+
+  const progress = playbackProgress(playbackMs)
+  const resolvedVisits = visitsResolvedByProgress(state.pendingReport.customerVisits, progress)
+  const resolvedSales = resolvedVisits.filter((visit) => visit.outcome === 'buy').length
+  const openingInventory = calculateOpeningInventory(
+    state.inventory,
+    state.plan.recipe,
+    state.pendingReport.cupsSold,
+  )
+
+  return calculateInventoryAfterSales(openingInventory, state.plan.recipe, resolvedSales)
+}
+
 function MetricCard({
   label,
   value,
@@ -241,7 +290,7 @@ function MetricCard({
   accent?: boolean
 }): JSX.Element {
   return (
-    <article className={`metric-card${accent ? ' metric-card-accent' : ''}`}>
+    <article className={`metric-card${accent ? ' metric-card-accent' : ''}`} aria-label={`${label}: ${value}`}>
       <span className="metric-label">{label}</span>
       <strong className="metric-value">{value}</strong>
     </article>
@@ -411,6 +460,11 @@ function MorningScreen({
   const cupCost = ingredientCostPerCup(state.market, form.recipe)
   const canAfford = spend <= state.money
   const forecast = weatherLabel(state)
+  const currentCupCapacity = calculateSellableCups(state.inventory, form.recipe)
+  const projectedCupCapacity = calculateSellableCups(
+    addInventories(state.inventory, form.purchases),
+    form.recipe,
+  )
 
   return (
     <section className="phase-shell">
@@ -427,6 +481,25 @@ function MorningScreen({
           <span className="summary-chip">Cup cost {formatMoney(cupCost)}</span>
         </div>
       </div>
+
+      <section className="panel sales-forecast-panel">
+        <div className="phase-header">
+          <div>
+            <p className="eyebrow">Sales forecast</p>
+            <h3>Sellable cups</h3>
+          </div>
+          <span className="summary-chip">Projected stock {formatCupCapacity(projectedCupCapacity)}</span>
+        </div>
+        <div className="forecast-grid">
+          <MetricCard label="Current Inventory" value={formatCupCapacity(currentCupCapacity)} accent />
+          <MetricCard label="After Shopping" value={formatCupCapacity(projectedCupCapacity)} />
+          <MetricCard label="Extra Capacity" value={formatCupDelta(currentCupCapacity, projectedCupCapacity)} />
+        </div>
+        <p className="forecast-copy">
+          <strong>{formatCupCapacity(currentCupCapacity)}</strong> from current inventory.{' '}
+          <strong>{formatCupCapacity(projectedCupCapacity)}</strong> after shopping.
+        </p>
+      </section>
 
       <div className="phase-grid">
         <section className="panel">
@@ -879,6 +952,7 @@ function App(): JSX.Element {
   const [error, setError] = useState<string | null>(null)
   const [dayPlaybackMs, setDayPlaybackMs] = useState(0)
   const [simulationSpeed, setSimulationSpeed] = useState(DEFAULT_SIMULATION_SPEED)
+  const inventoryOnHand = displayInventory(state, dayPlaybackMs)
 
   useEffect(() => {
     window.localStorage.setItem(SAVE_KEY, JSON.stringify(saveGame(state)))
@@ -948,7 +1022,7 @@ function App(): JSX.Element {
             : [],
         money: state.money,
         reputation: state.reputation,
-        inventory: state.inventory,
+        inventory: inventoryOnHand,
         simulationSpeed,
       })
 
@@ -956,7 +1030,7 @@ function App(): JSX.Element {
       delete appWindow.advanceTime
       delete appWindow.render_game_to_text
     }
-  }, [dayPlaybackMs, simulationSpeed, state])
+  }, [dayPlaybackMs, inventoryOnHand, simulationSpeed, state])
 
   const resetRun = (): void => {
     window.localStorage.removeItem(SAVE_KEY)
@@ -1071,9 +1145,9 @@ function App(): JSX.Element {
             <p className="eyebrow">Inventory</p>
             <h3>What&apos;s on hand</h3>
             <div className="market-grid">
-              <MetricCard label="Lemons" value={`${state.inventory.lemons}`} />
-              <MetricCard label="Sugar" value={`${state.inventory.sugar}`} />
-              <MetricCard label="Ice" value={`${state.inventory.ice}`} />
+              <MetricCard label="Lemons" value={`${inventoryOnHand.lemons}`} />
+              <MetricCard label="Sugar" value={`${inventoryOnHand.sugar}`} />
+              <MetricCard label="Ice" value={`${inventoryOnHand.ice}`} />
             </div>
           </section>
           <ActiveCardsPanel state={state} />

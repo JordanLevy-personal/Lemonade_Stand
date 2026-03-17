@@ -74,6 +74,54 @@ function buildDayState(): GameState {
   )
 }
 
+function buildMorningState(): GameState {
+  return {
+    ...createNewGame({ seed: 12 }),
+    money: 100,
+    inventory: {
+      lemons: 4,
+      sugar: 4,
+      ice: 4,
+    },
+    market: {
+      lemons: 0.5,
+      sugar: 0.2,
+      ice: 0.1,
+    },
+  }
+}
+
+function buildPlaybackInventoryState(): GameState {
+  return resolveDay(
+    setStrategy(
+      buyIngredients(
+        {
+          ...createNewGame({ seed: 5 }),
+          money: 100,
+          market: {
+            lemons: 0.5,
+            sugar: 0.2,
+            ice: 0.1,
+          },
+        },
+        {
+          lemons: 12,
+          sugar: 12,
+          ice: 12,
+        },
+      ),
+      {
+        recipe: {
+          lemons: 2,
+          sugar: 2,
+          ice: 2,
+        },
+        price: 0.5,
+      },
+    ),
+  )
+}
+
 describe('App', () => {
   beforeEach(() => {
     window.localStorage.clear()
@@ -153,6 +201,63 @@ describe('App', () => {
     })
 
     expect(screen.getByLabelText(/business clock/i)).toHaveTextContent('10:30 AM')
+  })
+
+  it('shows sellable cups now and after the staged shopping basket', () => {
+    persistState(buildMorningState())
+
+    render(<App />)
+
+    expect(screen.getByText(/sellable cups/i)).toBeInTheDocument()
+    expect(screen.getByLabelText(/current inventory: 2 cups/i)).toBeInTheDocument()
+    expect(screen.getByLabelText(/after shopping: 2 cups/i)).toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText(/buy lemons/i), {
+      target: {
+        value: '2',
+      },
+    })
+    fireEvent.change(screen.getByLabelText(/buy sugar/i), {
+      target: {
+        value: '2',
+      },
+    })
+    fireEvent.change(screen.getByLabelText(/buy ice/i), {
+      target: {
+        value: '2',
+      },
+    })
+
+    expect(screen.getByLabelText(/after shopping: 3 cups/i)).toBeInTheDocument()
+  })
+
+  it('reports opening inventory first and reduces it during day playback', async () => {
+    vi.useFakeTimers()
+    persistState(buildPlaybackInventoryState())
+
+    render(<App />)
+
+    const appWindow = window as Window & {
+      render_game_to_text?: () => string
+    }
+
+    const openingSnapshot = JSON.parse(appWindow.render_game_to_text?.() ?? '{}')
+
+    expect(openingSnapshot.inventory).toEqual({
+      lemons: 12,
+      sugar: 12,
+      ice: 12,
+    })
+
+    await act(async () => {
+      vi.advanceTimersByTime(4500)
+    })
+
+    const midDaySnapshot = JSON.parse(appWindow.render_game_to_text?.() ?? '{}')
+
+    expect(midDaySnapshot.inventory.lemons).toBeLessThan(12)
+    expect(midDaySnapshot.inventory.sugar).toBeLessThan(12)
+    expect(midDaySnapshot.inventory.ice).toBeLessThan(12)
   })
 
   it('disables unaffordable paid cards in the night draft', () => {

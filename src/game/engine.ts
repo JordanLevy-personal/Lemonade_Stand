@@ -63,6 +63,46 @@ function subtractInventory(left: Inventory, right: Inventory): Inventory {
   }
 }
 
+function scaleRecipe(recipe: Recipe, multiplier: number): Inventory {
+  return {
+    lemons: recipe.lemons * multiplier,
+    sugar: recipe.sugar * multiplier,
+    ice: recipe.ice * multiplier,
+  }
+}
+
+export function calculateSellableCups(inventory: Inventory, recipe: Recipe): number {
+  const capacities = (['lemons', 'sugar', 'ice'] as const)
+    .filter((ingredient) => recipe[ingredient] > 0)
+    .map((ingredient) => Math.floor(inventory[ingredient] / recipe[ingredient]))
+
+  if (capacities.length === 0) {
+    return Number.POSITIVE_INFINITY
+  }
+
+  return Math.max(0, Math.min(...capacities))
+}
+
+export function calculateOpeningInventory(
+  closingInventory: Inventory,
+  recipe: Recipe,
+  cupsSold: number,
+): Inventory {
+  return addInventory(closingInventory, scaleRecipe(recipe, cupsSold))
+}
+
+export function calculateInventoryAfterSales(
+  openingInventory: Inventory,
+  recipe: Recipe,
+  cupsSold: number,
+): Inventory {
+  return {
+    lemons: Math.max(0, openingInventory.lemons - recipe.lemons * cupsSold),
+    sugar: Math.max(0, openingInventory.sugar - recipe.sugar * cupsSold),
+    ice: Math.max(0, openingInventory.ice - recipe.ice * cupsSold),
+  }
+}
+
 function canServeCup(inventory: Inventory, recipe: Recipe): boolean {
   return (
     inventory.lemons >= recipe.lemons &&

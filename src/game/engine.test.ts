@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   applyEvening,
   buyIngredients,
+  calculateSellableCups,
   createNewGame,
   loadGame,
   refreshMorningMarket,
@@ -118,6 +119,23 @@ describe('engine', () => {
       ice: 4,
     })
     expect(next.money).toBe(15.5)
+  })
+
+  it('calculates sellable cups from inventory while ignoring zero-ingredient recipe slots', () => {
+    expect(
+      calculateSellableCups(
+        {
+          lemons: 8,
+          sugar: 1,
+          ice: 12,
+        },
+        {
+          lemons: 2,
+          sugar: 0,
+          ice: 4,
+        },
+      ),
+    ).toBe(3)
   })
 
   it('rewards weather-matching recipes with better satisfaction and reputation', () => {
