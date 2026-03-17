@@ -131,7 +131,7 @@ function createHostRoom(
 }
 
 function getPanelByText(pattern: RegExp): HTMLElement {
-  const source = screen.getByText(pattern)
+  const source = screen.getAllByText(pattern)[0]
   const panel = source.closest('.panel')
 
   if (panel === null) {
@@ -163,10 +163,14 @@ describe('App', () => {
   it('creates a room from the lobby', () => {
     render(<App />)
 
+    expect(screen.getByRole('button', { name: /host room/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /join room/i })).toBeInTheDocument()
+    expect(screen.queryByText(/lan/i)).not.toBeInTheDocument()
+
     fireEvent.change(screen.getByLabelText(/your name/i), {
       target: { value: 'Alex' },
     })
-    fireEvent.click(screen.getByRole('button', { name: /host lan room/i }))
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
 
     expect(openRoomConnectionMock).toHaveBeenCalledTimes(1)
     expect(sendMock).toHaveBeenCalledWith({
@@ -176,13 +180,37 @@ describe('App', () => {
     })
   })
 
+  it('shows room wording in the waiting room after the host creates a room', () => {
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'room_state',
+      room: createRoom({ phase: 'lobby' }),
+    })
+
+    expect(screen.getByText(/share your .*client url/i)).toBeInTheDocument()
+    expect(screen.getByText(/join room room-42/i)).toBeInTheDocument()
+    expect(screen.queryByText(/lan/i)).not.toBeInTheDocument()
+  })
+
   it('submits a private plan during planning', () => {
     render(<App />)
 
     fireEvent.change(screen.getByLabelText(/your name/i), {
       target: { value: 'Alex' },
     })
-    fireEvent.click(screen.getByRole('button', { name: /host lan room/i }))
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
 
     emitMessage({
       type: 'connected',
@@ -223,6 +251,102 @@ describe('App', () => {
     })
   })
 
+  it('shows inventory projection and ingredient cost during planning', () => {
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'room_state',
+      room: createHostRoom(
+        {
+          inventory: {
+            lemons: 9,
+            sugar: 14,
+            ice: 19,
+          },
+          dailyPlan: {
+            purchases: {
+              lemons: 1,
+              sugar: 2,
+              ice: 3,
+            },
+            recipe: {
+              lemons: 2,
+              sugar: 2,
+              ice: 3,
+            },
+            price: 1.4,
+          },
+        },
+      ),
+    })
+
+    const inventoryPanel = getPanelByText(/inventory/i)
+    const scopedInventory = within(inventoryPanel)
+
+    expect(scopedInventory.getAllByText(/current inventory/i).length).toBeGreaterThan(0)
+    expect(scopedInventory.getAllByText(/projected inventory|after shopping/i).length).toBeGreaterThan(0)
+    expect(scopedInventory.getByText('9')).toBeInTheDocument()
+    expect(scopedInventory.getByText('14')).toBeInTheDocument()
+    expect(scopedInventory.getByText('19')).toBeInTheDocument()
+    expect(scopedInventory.getByText('10')).toBeInTheDocument()
+    expect(scopedInventory.getByText('16')).toBeInTheDocument()
+    expect(scopedInventory.getByText('22')).toBeInTheDocument()
+    expect(screen.getByText(/\$1\.53/)).toBeInTheDocument()
+  })
+
+  it('updates the ingredient cost per cup when the recipe changes', () => {
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'room_state',
+      room: createHostRoom({
+        dailyPlan: {
+          purchases: {
+            lemons: 1,
+            sugar: 2,
+            ice: 3,
+          },
+          recipe: {
+            lemons: 2,
+            sugar: 2,
+            ice: 3,
+          },
+          price: 1.4,
+        },
+      }),
+    })
+
+    expect(screen.getByText(/\$1\.53/)).toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText(/lemons per cup/i), {
+      target: { value: '3' },
+    })
+
+    expect(screen.getByText(/\$1\.98/)).toBeInTheDocument()
+  })
+
   it('renders the simulation scene from a shared start event', () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-03-16T12:00:02.000Z'))
@@ -232,7 +356,7 @@ describe('App', () => {
     fireEvent.change(screen.getByLabelText(/your name/i), {
       target: { value: 'Alex' },
     })
-    fireEvent.click(screen.getByRole('button', { name: /host lan room/i }))
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
 
     emitMessage({
       type: 'connected',
@@ -278,13 +402,100 @@ describe('App', () => {
     expect(screen.getAllByText(/blair/i).length).toBeGreaterThan(0)
   })
 
+  it('depletes the current player inventory as simulation sales resolve', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-03-16T12:00:00.000Z'))
+
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'simulation_started',
+      simulationStartAt: Date.parse('2026-03-16T12:00:00.000Z'),
+      room: createHostRoom(
+        {
+          inventory: {
+            lemons: 3,
+            sugar: 4,
+            ice: 5,
+          },
+          dailyPlan: {
+            purchases: {
+              lemons: 0,
+              sugar: 0,
+              ice: 0,
+            },
+            recipe: {
+              lemons: 1,
+              sugar: 1,
+              ice: 1,
+            },
+            price: 1.5,
+          },
+        },
+        {
+          phase: 'simulating',
+          simulation: {
+            durationMs: 6000,
+            simulationStartAt: Date.parse('2026-03-16T12:00:00.000Z'),
+            customerEvents: [
+              {
+                id: 'event-a',
+                arrivalOffsetMs: 0,
+                willingnessToPay: 2,
+                chosenPlayerId: 'player-host',
+                outcome: 'buy',
+                salePrice: 1.5,
+                satisfaction: 0.8,
+              },
+              {
+                id: 'event-b',
+                arrivalOffsetMs: 400,
+                willingnessToPay: 1,
+                chosenPlayerId: 'player-guest',
+                outcome: 'skip',
+                salePrice: 0,
+                satisfaction: 0,
+              },
+            ],
+          },
+        },
+      ),
+    })
+
+    const inventoryPanel = getPanelByText(/inventory/i)
+    const scopedInventory = within(inventoryPanel)
+
+    expect(scopedInventory.getByText('3')).toBeInTheDocument()
+    expect(scopedInventory.getByText('4')).toBeInTheDocument()
+    expect(scopedInventory.getByText('5')).toBeInTheDocument()
+
+    act(() => {
+      vi.advanceTimersByTime(1_600)
+    })
+
+    expect(scopedInventory.getByText('2')).toBeInTheDocument()
+    expect(scopedInventory.getByText('3')).toBeInTheDocument()
+    expect(scopedInventory.getByText('4')).toBeInTheDocument()
+  })
+
   it('requests the next day from the results screen', () => {
     render(<App />)
 
     fireEvent.change(screen.getByLabelText(/your name/i), {
       target: { value: 'Alex' },
     })
-    fireEvent.click(screen.getByRole('button', { name: /host lan room/i }))
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
 
     emitMessage({
       type: 'connected',
@@ -357,7 +568,7 @@ describe('App', () => {
     fireEvent.change(screen.getByLabelText(/your name/i), {
       target: { value: 'Alex' },
     })
-    fireEvent.click(screen.getByRole('button', { name: /host lan room/i }))
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
 
     act(() => {
       latestHandlers?.onClose?.({

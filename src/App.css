@@ -144,6 +144,14 @@
   gap: 0.2rem;
 }
 
+.panel-header {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+}
+
 .metric-label {
   font-size: 0.8rem;
   color: rgba(29, 74, 79, 0.72);
@@ -161,6 +169,65 @@
   padding: 0.45rem 0.8rem;
   background: rgba(255, 255, 255, 0.8);
   color: #1d4a4f;
+}
+
+.summary-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+}
+
+.sales-forecast-panel {
+  position: relative;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at top right, rgba(243, 182, 63, 0.24), transparent 30%),
+    linear-gradient(135deg, rgba(255, 248, 212, 0.96), rgba(255, 255, 255, 0.92));
+}
+
+.sales-forecast-panel::after {
+  content: '';
+  position: absolute;
+  inset: auto -3rem -4rem auto;
+  width: 10rem;
+  height: 10rem;
+  border-radius: 999px;
+  background: rgba(241, 137, 63, 0.1);
+  pointer-events: none;
+}
+
+.forecast-grid {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  gap: 0.85rem;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  margin-top: 1rem;
+}
+
+.forecast-copy {
+  position: relative;
+  z-index: 1;
+  margin: 1rem 0 0;
+  color: #14363b;
+}
+
+.inventory-grid {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  margin-top: 1rem;
+}
+
+.inventory-grid-single {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.inventory-group {
+  display: grid;
+  gap: 0.75rem;
 }
 
 .crowd-panel {

@@ -11,7 +11,7 @@ import {
   calculateSellableCups,
   emptyInventory,
 } from './game/engine'
-import type { DailyPlan, Inventory } from './game/types'
+import type { DailyPlan, Inventory, Recipe } from './game/types'
 import type {
   ClientMessage,
   CustomerEvent,
@@ -105,6 +105,78 @@ function addInventory(left: Inventory, right: Inventory): Inventory {
     sugar: left.sugar + right.sugar,
     ice: left.ice + right.ice,
   }
+}
+
+function subtractRecipe(inventory: Inventory, recipe: Recipe, count: number): Inventory {
+  return {
+    lemons: Math.max(0, inventory.lemons - recipe.lemons * count),
+    sugar: Math.max(0, inventory.sugar - recipe.sugar * count),
+    ice: Math.max(0, inventory.ice - recipe.ice * count),
+  }
+}
+
+function addRecipe(inventory: Inventory, recipe: Recipe, count: number): Inventory {
+  return {
+    lemons: inventory.lemons + recipe.lemons * count,
+    sugar: inventory.sugar + recipe.sugar * count,
+    ice: inventory.ice + recipe.ice * count,
+  }
+}
+
+function ingredientCostPerCup(market: Inventory | null, recipe: Recipe): number {
+  if (market === null) {
+    return 0
+  }
+
+  return Number(
+    (
+      recipe.lemons * market.lemons +
+      recipe.sugar * market.sugar +
+      recipe.ice * market.ice
+    ).toFixed(2),
+  )
+}
+
+function formatCupCapacity(count: number): string {
+  if (!Number.isFinite(count)) {
+    return 'Unlimited'
+  }
+
+  return `${count} cup${count === 1 ? '' : 's'}`
+}
+
+function formatCupDelta(current: number, projected: number): string {
+  if (!Number.isFinite(projected)) {
+    return Number.isFinite(current) ? 'Unlimited after shopping' : 'Still unlimited'
+  }
+
+  if (!Number.isFinite(current)) {
+    return 'Already unlimited'
+  }
+
+  const delta = Math.max(0, projected - current)
+  return delta === 0 ? 'No extra cups' : `+${formatCupCapacity(delta)}`
+}
+
+function inventoryForSimulation(
+  player: NonNullable<ReturnType<typeof findCurrentPlayer>>,
+  events: CustomerEvent[],
+  elapsedMs: number,
+): Inventory {
+  const recipe = player.dailyPlan?.recipe ?? defaultBalanceConfig.defaultRecipe
+  const resolvedSales = events.filter(
+    (event) =>
+      event.outcome === 'buy' &&
+      event.chosenPlayerId === player.id &&
+      isEventResolved(event, elapsedMs),
+  ).length
+  const openingInventory = addRecipe(
+    player.inventory,
+    recipe,
+    player.dailyResults?.cupsSold ?? 0,
+  )
+
+  return subtractRecipe(openingInventory, recipe, resolvedSales)
 }
 
 function findCurrentPlayer(room: RoomState | null, playerId: string | null) {
@@ -211,6 +283,25 @@ function MetricCard({
   )
 }
 
+function InventoryMetrics({
+  title,
+  inventory,
+}: {
+  title: string
+  inventory: Inventory
+}): JSX.Element {
+  return (
+    <div className="inventory-group" aria-label={title}>
+      <p className="eyebrow">{title}</p>
+      <div className="metric-grid compact-grid">
+        <MetricCard label="Lemons" value={`${inventory.lemons}`} />
+        <MetricCard label="Sugar" value={`${inventory.sugar}`} />
+        <MetricCard label="Ice" value={`${inventory.ice}`} />
+      </div>
+    </div>
+  )
+}
+
 function NumberField({
   label,
   value,
@@ -259,10 +350,10 @@ function LobbyScreen({
   return (
     <section className="app-stage">
       <div className="panel hero-panel">
-        <p className="eyebrow">LAN MVP</p>
+        <p className="eyebrow">Multiplayer MVP</p>
         <h1>Multiplayer Lemonade Stand</h1>
         <p className="muted">
-          Host a room on this laptop, share the LAN URL, and let the market decide who wins the rush.
+          Host a room on this device, share the client URL or room code, and let the market decide who wins the rush.
         </p>
       </div>
 
@@ -296,7 +387,7 @@ function LobbyScreen({
           </div>
           <div className="action-row">
             <button className="action-button action-button-primary" onClick={onHost}>
-              Host LAN Room
+              Host Room
             </button>
           </div>
         </section>
@@ -316,7 +407,7 @@ function LobbyScreen({
           </div>
           <div className="action-row">
             <button className="action-button action-button-secondary" onClick={onJoin}>
-              Join LAN Room
+              Join Room
             </button>
           </div>
         </section>
@@ -347,7 +438,7 @@ function WaitingScreen({
         <p className="eyebrow">Room created</p>
         <h1>{roomId}</h1>
         <p className="muted">
-          Share your LAN client URL with the second player and have them join room {roomId}.
+          Share your client URL with the second player and have them join room {roomId}.
         </p>
       </div>
     </section>
@@ -371,6 +462,8 @@ function PlanningScreen({
 }): JSX.Element {
   const market = room.marketBasePrices ?? emptyInventory()
   const spend = room.marketBasePrices === null ? 0 : calculatePurchaseCost(market, localPlan.purchases)
+  const cupCost = ingredientCostPerCup(room.marketBasePrices, localPlan.recipe)
+  const currentCups = calculateSellableCups(currentPlayer.inventory, localPlan.recipe)
   const projectedInventory = addInventory(currentPlayer.inventory, localPlan.purchases)
   const projectedCups = calculateSellableCups(projectedInventory, localPlan.recipe)
   const canAfford = spend <= currentPlayer.money
@@ -391,6 +484,36 @@ function PlanningScreen({
         <MetricCard label="Cash" value={formatMoney(currentPlayer.money)} />
         <MetricCard label="Projected Cups" value={Number.isFinite(projectedCups) ? `${projectedCups}` : 'Infinite'} />
       </div>
+
+      <section className="panel sales-forecast-panel">
+        <div className="panel-header">
+          <div>
+            <p className="eyebrow">Inventory</p>
+            <h2>Stock and cup forecast</h2>
+          </div>
+          <div className="summary-chip-row">
+            <span className="summary-chip">Spend plan {formatMoney(spend)}</span>
+            <span className="summary-chip">Ingredient cost/cup {formatMoney(cupCost)}</span>
+            <span className="summary-chip">Projected stock {formatCupCapacity(projectedCups)}</span>
+          </div>
+        </div>
+
+        <div className="forecast-grid">
+          <MetricCard label="Current Inventory" value={formatCupCapacity(currentCups)} />
+          <MetricCard label="After Shopping" value={formatCupCapacity(projectedCups)} />
+          <MetricCard label="Extra Capacity" value={formatCupDelta(currentCups, projectedCups)} />
+        </div>
+
+        <p className="forecast-copy">
+          <strong>{formatCupCapacity(currentCups)}</strong> from current inventory.{' '}
+          <strong>{formatCupCapacity(projectedCups)}</strong> after shopping.
+        </p>
+
+        <div className="inventory-grid">
+          <InventoryMetrics title="Current Inventory" inventory={currentPlayer.inventory} />
+          <InventoryMetrics title="Projected Inventory" inventory={projectedInventory} />
+        </div>
+      </section>
 
       <div className="panel-grid">
         <section className="panel">
@@ -502,9 +625,11 @@ function PlanningScreen({
 function SimulationScreen({
   room,
   elapsedMs,
+  currentPlayer,
 }: {
   room: RoomState
   elapsedMs: number
+  currentPlayer: NonNullable<ReturnType<typeof findCurrentPlayer>>
 }): JSX.Element {
   const simulation = room.simulation
   if (simulation === null) {
@@ -522,6 +647,7 @@ function SimulationScreen({
   const playerSales = room.players.map((player) =>
     resolvedEvents.filter((event) => event.outcome === 'buy' && event.chosenPlayerId === player.id).length,
   )
+  const liveInventory = inventoryForSimulation(currentPlayer, simulation.customerEvents, elapsedMs)
 
   return (
     <section className="app-stage">
@@ -561,6 +687,14 @@ function SimulationScreen({
               {event.outcome === 'buy' ? <span className="sale-tag">+{formatMoney(event.salePrice)}</span> : null}
             </div>
           ))}
+        </div>
+      </section>
+
+      <section className="panel">
+        <p className="eyebrow">Inventory</p>
+        <h2>Remaining stock</h2>
+        <div className="inventory-grid inventory-grid-single">
+          <InventoryMetrics title={currentPlayer.name} inventory={liveInventory} />
         </div>
       </section>
     </section>
@@ -891,7 +1025,7 @@ function App(): JSX.Element {
       <header className="topbar">
         <div>
           <p className="eyebrow">Shared Market</p>
-          <strong className="topbar-title">Lemonade Stand LAN</strong>
+          <strong className="topbar-title">Lemonade Stand Multiplayer</strong>
         </div>
         {room !== null ? (
           <div className="topbar-metrics">
@@ -926,7 +1060,9 @@ function App(): JSX.Element {
           onLockIn={lockInPlan}
         />
       ) : null}
-      {room?.phase === 'simulating' ? <SimulationScreen room={room} elapsedMs={elapsedMs} /> : null}
+      {room?.phase === 'simulating' && currentPlayer !== null ? (
+        <SimulationScreen room={room} elapsedMs={elapsedMs} currentPlayer={currentPlayer} />
+      ) : null}
       {room?.phase === 'results' ? (
         <ResultsScreen
           room={room}
