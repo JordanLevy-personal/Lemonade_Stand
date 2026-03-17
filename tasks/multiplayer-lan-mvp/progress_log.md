@@ -72,3 +72,27 @@ Transitioning the project from a single-player roguelike loop into a 2-player LA
 - `npm run test:run -- src/game/engine.test.ts src/App.test.tsx server/room-manager.test.ts`
 - `npm run build`
 - `npm run test:run`
+
+### 2026-03-17 09:40:56 PDT - Live deployment multiplayer status check
+
+- **Status:** Completed
+- **Work Completed:** Reviewed the existing multiplayer task artifacts and code paths to verify scope, then smoke-tested the public deployment at `https://jordanlevy.xyz`. Confirmed the original implementation task was intentionally scoped to LAN-only UX/documentation, but the live deployment now exposes the multiplayer WebSocket endpoint at `wss://jordanlevy.xyz/ws` and supports room creation plus a second client joining the same room over the public domain.
+- **Validation:** Reviewed `tasks/multiplayer-lan-mvp/spec.md`, `tasks/multiplayer-lan-mvp/progress_log.md`, `src/client/socket.ts`, `src/App.tsx`, `server/socket-server.ts`, and `docs/deployment/hetzner-vps.md`. Verified `https://jordanlevy.xyz` returned `200 OK`. Opened a live WebSocket connection to `wss://jordanlevy.xyz/ws` and received a successful `connected` response after sending `create_room`. Opened two live WebSocket clients against `wss://jordanlevy.xyz/ws`, created a room, joined it from the second client, and confirmed both players reached the `planning` phase in the same room.
+- **Decisions / Notes:** Current mismatch is mostly naming/scope communication rather than backend capability. The repo still labels the product and UI as `LAN MVP`, and the task spec explicitly lists internet play as out of scope, but the deployed architecture now supports direct internet play via a shared public host plus room id as long as both players can reach `jordanlevy.xyz`.
+- **Next Step:** Decide whether to treat this as an official internet-play MVP and update product copy/docs accordingly, or keep positioning it as LAN-first until we manually validate the full browser flow between two real remote players.
+
+### 2026-03-17 13:12:35 PDT - Cross-network mobile verification and intermittent connection review
+
+- **Status:** Completed
+- **Work Completed:** Reviewed the intermittent mobile error report against the live client strings and deployment behavior after cross-network manual testing began to succeed from mobile to mobile. Confirmed the likely user-facing error text is currently `The LAN room connection failed.` from the browser WebSocket error handler, with `The room connection closed.` as the related close-path fallback.
+- **Validation:** Inspected `src/client/socket.ts`, `src/App.tsx`, and `deploy/nginx/roguelike-lemonade-stand.conf`. Reviewed live Nginx access logs showing successful `GET /ws` upgrades with `101` responses from both mobile clients and no corresponding Nginx error log entries during the reported failures.
+- **Decisions / Notes:** The evidence points away from a basic Nginx WebSocket proxy misconfiguration and toward an intermittent connection-lifecycle issue, likely on the browser/mobile/network side or due to missing keepalive behavior in the current WebSocket flow. The existing `LAN` wording in errors is now misleading for the public deployment and makes diagnosis harder.
+- **Next Step:** Add better connection diagnostics, neutralize the public-facing `LAN` error text, and consider heartbeat / reconnect handling if manual testing keeps showing sporadic mobile disconnects.
+
+### 2026-03-17 13:24:25 PDT - Connection instrumentation added for live debugging
+
+- **Status:** Completed
+- **Work Completed:** Added client-side websocket diagnostics for open, error, and close events, including close-code details surfaced through the UI when a room connection drops. Added server-side structured lifecycle logging for socket connect, inbound message types, room creation/join, plan submission, next-day requests, socket errors, socket close events, and player disconnects. Added tests covering the new close diagnostics and server logging path.
+- **Validation:** `npx vitest run src/App.test.tsx server/socket-server.test.ts`, `npx vitest run src/game/engine.test.ts src/App.test.tsx server/room-manager.test.ts server/socket-server.test.ts`, and `npm run build`
+- **Decisions / Notes:** Kept the instrumentation additive and low-risk by avoiding gameplay-protocol changes. Current work improves observability first so the next intermittent mobile failure should yield actionable client close codes and server lifecycle logs before we decide whether heartbeat or reconnect logic is needed.
+- **Next Step:** Manually reproduce the intermittent mobile disconnect again, capture the exact on-screen error plus new server logs, and then decide whether to prioritize keepalive, reconnect, or deployment header refinements.

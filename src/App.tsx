@@ -123,6 +123,18 @@ function weatherLabel(room: RoomState | null): string {
   return defaultBalanceConfig.weatherProfiles[room.weather].label
 }
 
+function describeCloseReason(reason: string): string {
+  return reason.trim() === '' ? 'No reason provided.' : reason
+}
+
+function closeMessage(code: number, reason: string, wasClean: boolean): string {
+  if (wasClean) {
+    return `The room connection closed. Code ${code}. Reason: ${describeCloseReason(reason)}`
+  }
+
+  return `The room connection closed unexpectedly. Code ${code}. Reason: ${describeCloseReason(reason)}`
+}
+
 function eventProgress(event: CustomerEvent, elapsedMs: number): number {
   const resolveAt = event.arrivalOffsetMs + 1_500
   if (elapsedMs <= event.arrivalOffsetMs) {
@@ -762,8 +774,8 @@ function App(): JSX.Element {
           setError(message.message)
         })
       },
-      onClose() {
-        setError((current) => current ?? 'The room connection closed.')
+      onClose(details) {
+        setError((current) => current ?? closeMessage(details.code, details.reason, details.wasClean))
       },
       onError(message) {
         setError(message)

@@ -1,9 +1,15 @@
 import type { ClientMessage, ServerMessage } from './protocol'
 
+export interface RoomConnectionCloseDetails {
+  code: number
+  reason: string
+  wasClean: boolean
+}
+
 export interface RoomConnectionHandlers {
   onMessage: (message: ServerMessage) => void
   onOpen?: () => void
-  onClose?: () => void
+  onClose?: (details: RoomConnectionCloseDetails) => void
   onError?: (message: string) => void
 }
 
@@ -37,6 +43,9 @@ export function openRoomConnection(
 
   socket.addEventListener('open', () => {
     isOpen = true
+    console.info('[room-socket] opened', {
+      socketUrl,
+    })
     flushQueue()
     handlers.onOpen?.()
   })
@@ -49,13 +58,27 @@ export function openRoomConnection(
     }
   })
 
-  socket.addEventListener('close', () => {
+  socket.addEventListener('close', (event) => {
     isOpen = false
-    handlers.onClose?.()
+    const details: RoomConnectionCloseDetails = {
+      code: event.code,
+      reason: event.reason,
+      wasClean: event.wasClean,
+    }
+
+    console.warn('[room-socket] closed', {
+      socketUrl,
+      ...details,
+    })
+    handlers.onClose?.(details)
   })
 
   socket.addEventListener('error', () => {
-    handlers.onError?.('The LAN room connection failed.')
+    console.warn('[room-socket] error', {
+      socketUrl,
+      readyState: socket.readyState,
+    })
+    handlers.onError?.('The room connection failed.')
   })
 
   return {

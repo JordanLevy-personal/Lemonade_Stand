@@ -321,4 +321,24 @@ describe('App', () => {
       playerId: 'player-guest',
     })
   })
+
+  it('shows websocket close diagnostics when the room connection closes unexpectedly', () => {
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host lan room/i }))
+
+    act(() => {
+      latestHandlers?.onClose?.({
+        code: 1006,
+        reason: '',
+        wasClean: false,
+      })
+    })
+
+    expect(screen.getByText(/room connection closed unexpectedly/i)).toBeInTheDocument()
+    expect(screen.getByText(/code 1006/i)).toBeInTheDocument()
+  })
 })

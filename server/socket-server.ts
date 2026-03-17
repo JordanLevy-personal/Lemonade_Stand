@@ -1,4 +1,4 @@
-import { createServer, type Server as HttpServer } from 'node:http'
+import { createServer, type IncomingMessage, type Server as HttpServer } from 'node:http'
 
 import type { ClientMessage, PlayerSession, ServerMessage } from './contracts'
 import { createDefaultRoomGameHooks } from './default-game-hooks'
@@ -10,11 +10,20 @@ type WebSocketServer = import('ws').WebSocketServer
 interface ClientConnection {
   socket: WebSocket
   session: PlayerSession | null
+  clientAddress: string
+  userAgent: string
 }
 
 export interface LanServerOptions {
   port?: number
   now?: () => number
+  logger?: LanServerLogger
+}
+
+export interface LanServerLogger {
+  info: (event: string, details: Record<string, unknown>) => void
+  warn: (event: string, details: Record<string, unknown>) => void
+  error: (event: string, details: Record<string, unknown>) => void
 }
 
 function send(socket: WebSocket, message: ServerMessage): void {
@@ -29,6 +38,44 @@ function roomCode(): string {
   return Math.random().toString(36).slice(2, 8).toUpperCase()
 }
 
+function forwardedHeaderValue(request: IncomingMessage, name: string): string | null {
+  const value = request.headers[name]
+
+  if (Array.isArray(value)) {
+    return value[0] ?? null
+  }
+
+  return value ?? null
+}
+
+function clientAddress(request: IncomingMessage): string {
+  const forwardedFor = forwardedHeaderValue(request, 'x-forwarded-for')
+
+  if (forwardedFor !== null) {
+    return forwardedFor.split(',')[0]?.trim() ?? 'unknown'
+  }
+
+  return request.socket.remoteAddress ?? 'unknown'
+}
+
+function userAgent(request: IncomingMessage): string {
+  return forwardedHeaderValue(request, 'user-agent') ?? 'unknown'
+}
+
+function defaultLogger(): LanServerLogger {
+  return {
+    info(event, details) {
+      console.info(`[lan-server] ${event}`, details)
+    },
+    warn(event, details) {
+      console.warn(`[lan-server] ${event}`, details)
+    },
+    error(event, details) {
+      console.error(`[lan-server] ${event}`, details)
+    },
+  }
+}
+
 export async function createLanServer(
   options: LanServerOptions = {},
 ): Promise<{
@@ -38,6 +85,7 @@ export async function createLanServer(
 }> {
   const { WebSocketServer } = await import('ws')
   const manager = new RoomManager(createDefaultRoomGameHooks(), options.now)
+  const logger = options.logger ?? defaultLogger()
   const connections = new Set<ClientConnection>()
   const roomTimers = new Map<string, ReturnType<typeof setTimeout>>()
   const httpServer = createServer((_request, response) => {
@@ -80,16 +128,28 @@ export async function createLanServer(
     roomTimers.set(roomId, timer)
   }
 
-  websocketServer.on('connection', (socket) => {
+  websocketServer.on('connection', (socket, request) => {
     const connection: ClientConnection = {
       socket,
       session: null,
+      clientAddress: clientAddress(request),
+      userAgent: userAgent(request),
     }
     connections.add(connection)
+    logger.info('socket_connected', {
+      clientAddress: connection.clientAddress,
+      userAgent: connection.userAgent,
+    })
 
     socket.on('message', (payload) => {
       try {
         const message = parseMessage(String(payload))
+        logger.info('client_message', {
+          clientAddress: connection.clientAddress,
+          roomId: 'roomId' in message ? message.roomId : null,
+          playerId: 'playerId' in message ? message.playerId ?? null : null,
+          type: message.type,
+        })
 
         if (message.type === 'create_room') {
           const playerId = `${roomCode().toLowerCase()}-host`
@@ -105,6 +165,12 @@ export async function createLanServer(
             roomId,
             playerId,
           }
+          logger.info('room_created', {
+            clientAddress: connection.clientAddress,
+            playerId,
+            playerName: message.name,
+            roomId,
+          })
           send(socket, {
             type: 'connected',
             roomId,
@@ -134,6 +200,12 @@ export async function createLanServer(
             roomId: room.roomId,
             playerId,
           }
+          logger.info('room_joined', {
+            clientAddress: connection.clientAddress,
+            playerId,
+            playerName: message.name,
+            roomId: room.roomId,
+          })
           send(socket, {
             type: 'connected',
             roomId: room.roomId,
@@ -150,10 +222,19 @@ export async function createLanServer(
             playerId: message.playerId,
             plan: message.plan,
           })
+          logger.info('plan_submitted', {
+            clientAddress: connection.clientAddress,
+            playerId: message.playerId,
+            roomId: message.roomId,
+          })
 
           broadcastRoomState(message.roomId)
 
           if (result.simulationStartedAt !== null) {
+            logger.info('simulation_started', {
+              roomId: message.roomId,
+              simulationStartAt: result.simulationStartedAt,
+            })
             broadcast(message.roomId, {
               type: 'simulation_started',
               room: result.room,
@@ -172,8 +253,19 @@ export async function createLanServer(
           roomId: message.roomId,
           playerId: message.playerId,
         })
+        logger.info('next_day_requested', {
+          clientAddress: connection.clientAddress,
+          playerId: message.playerId,
+          roomId: message.roomId,
+        })
         broadcastRoomState(room.roomId)
       } catch (error) {
+        logger.warn('socket_message_failed', {
+          clientAddress: connection.clientAddress,
+          error: error instanceof Error ? error.message : 'Unknown server error.',
+          roomId: connection.session?.roomId ?? null,
+          playerId: connection.session?.playerId ?? null,
+        })
         send(socket, {
           type: 'server_error',
           message: error instanceof Error ? error.message : 'Unknown server error.',
@@ -181,9 +273,31 @@ export async function createLanServer(
       }
     })
 
-    socket.on('close', () => {
+    socket.on('error', (error) => {
+      logger.warn('socket_error', {
+        clientAddress: connection.clientAddress,
+        error: error.message,
+        roomId: connection.session?.roomId ?? null,
+        playerId: connection.session?.playerId ?? null,
+      })
+    })
+
+    socket.on('close', (code, reasonBuffer) => {
+      logger.info('socket_closed', {
+        clientAddress: connection.clientAddress,
+        code,
+        playerId: connection.session?.playerId ?? null,
+        reason: reasonBuffer.toString(),
+        roomId: connection.session?.roomId ?? null,
+      })
+
       if (connection.session !== null) {
         const room = manager.disconnect(connection.session)
+        logger.info('player_disconnected', {
+          clientAddress: connection.clientAddress,
+          playerId: connection.session.playerId,
+          roomId: connection.session.roomId,
+        })
         broadcastRoomState(room.roomId)
       }
 
