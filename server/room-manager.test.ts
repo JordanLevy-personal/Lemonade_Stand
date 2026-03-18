@@ -52,6 +52,8 @@ function createHooks(): RoomGameHooks {
     createDay(day: number): {
       weather: Weather
       marketBasePrices: MarketBasePrices
+      customerRoster: NonNullable<RoomState['customerRoster']>
+      rngSeed: number
     } {
       return {
         weather: day % 2 === 0 ? 'hot' : 'sunny',
@@ -60,6 +62,8 @@ function createHooks(): RoomGameHooks {
           sugar: 0.2,
           ice: 0.1,
         },
+        customerRoster: [],
+        rngSeed: day,
       }
     },
     startSimulation(room: RoomState, simulationStartAt: number): RoomState {
