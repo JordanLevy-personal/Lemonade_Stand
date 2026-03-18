@@ -2,6 +2,7 @@
 
 import { describe, expect, it } from 'vitest'
 
+import type { SimulationTelemetry } from '../src/game/types'
 import type {
   DailyPlan,
   FactionSelection,
@@ -49,6 +50,18 @@ function emptyInventory(): Inventory {
 
 function createHooks(): RoomGameHooks {
   return {
+    createInitialState(seed: number) {
+      return {
+        customerRoster: [
+          {
+            id: `customer-${seed}`,
+            tasteOffsets: { lemons: 0, sugar: 0, ice: 0 },
+            standHistory: {},
+          },
+        ],
+        rngSeed: seed + 100,
+      }
+    },
     createDay(day: number): {
       weather: Weather
       marketBasePrices: MarketBasePrices
@@ -62,37 +75,47 @@ function createHooks(): RoomGameHooks {
         },
       }
     },
-    startSimulation(room: RoomState, simulationStartAt: number): RoomState {
+    startSimulation(room: RoomState, simulationStartAt: number): { room: RoomState; telemetry: SimulationTelemetry } {
       return {
-        ...room,
-        phase: 'simulating',
-        simulation: {
-          customerEvents: [
-            {
-              id: 'event-1',
-              arrivalOffsetMs: 0,
-              willingnessToPay: 2,
-              chosenPlayerId: room.players[0]?.id ?? null,
-              outcome: 'buy',
-              salePrice: 1.5,
-              satisfaction: 0.9,
-            },
-          ],
-          simulationStartAt,
-          durationMs: 6000,
+        room: {
+          ...room,
+          phase: 'simulating',
+          simulation: {
+            customerEvents: [
+              {
+                id: 'event-1',
+                arrivalOffsetMs: 0,
+                willingnessToPay: 2,
+                chosenPlayerId: room.players[0]?.id ?? null,
+                outcome: 'buy',
+                salePrice: 1.5,
+                satisfaction: 0.9,
+              },
+            ],
+            simulationStartAt,
+            durationMs: 6000,
+          },
+          players: room.players.map((player, index) => ({
+            ...player,
+            dailyResults:
+              index === 0
+                ? {
+                    cupsSold: 1,
+                    revenue: 1.5,
+                    satisfaction: 0.9,
+                    reputationDelta: 2,
+                    customersWon: 1,
+                    customersSkipped: 0,
+                    customersSoldOut: 0,
+                  }
+                : null,
+          })),
         },
-        players: room.players.map((player, index) => ({
-          ...player,
-          dailyResults:
-            index === 0
-              ? {
-                  cupsSold: 1,
-                  revenue: 1.5,
-                  satisfaction: 0.9,
-                  reputationDelta: 2,
-                }
-              : null,
-        })),
+        telemetry: {
+          customerProfiles: [],
+          customerEvents: [],
+          customerOfferScores: [],
+        },
       }
     },
     startNextDay(room: RoomState): RoomState {
@@ -134,6 +157,7 @@ describe('RoomManager', () => {
       playerId: 'host-1',
       name: 'Host',
       faction: FACTION_ALPHA,
+      analyticsPlayerId: 'analytics-host',
     })
 
     expect(room.roomId).toBe('ROOM01')
@@ -150,12 +174,14 @@ describe('RoomManager', () => {
       playerId: 'host-1',
       name: 'Host',
       faction: FACTION_ALPHA,
+      analyticsPlayerId: 'analytics-host',
     })
 
     const room = manager.joinRoom({
       roomId: 'ROOM01',
       name: 'Guest',
       faction: FACTION_BETA,
+      analyticsPlayerId: 'analytics-guest',
     })
 
     expect(room.phase).toBe('planning')
@@ -170,11 +196,13 @@ describe('RoomManager', () => {
       playerId: 'host-1',
       name: 'Host',
       faction: FACTION_ALPHA,
+      analyticsPlayerId: 'analytics-host',
     })
     manager.joinRoom({
       roomId: 'ROOM01',
       name: 'Guest',
       faction: FACTION_BETA,
+      analyticsPlayerId: 'analytics-guest',
     })
 
     const firstResult = manager.submitPlan({
@@ -201,11 +229,13 @@ describe('RoomManager', () => {
       playerId: 'host-1',
       name: 'Host',
       faction: FACTION_ALPHA,
+      analyticsPlayerId: 'analytics-host',
     })
     manager.joinRoom({
       roomId: 'ROOM01',
       name: 'Guest',
       faction: FACTION_BETA,
+      analyticsPlayerId: 'analytics-guest',
     })
 
     const paused = manager.disconnect({
@@ -217,6 +247,7 @@ describe('RoomManager', () => {
       playerId: 'host-1',
       name: 'Host',
       faction: FACTION_ALPHA,
+      analyticsPlayerId: 'analytics-host-reconnect',
     })
 
     expect(paused.phase).toBe('paused')
@@ -233,11 +264,13 @@ describe('RoomManager', () => {
       playerId: 'host-1',
       name: 'Host',
       faction: FACTION_ALPHA,
+      analyticsPlayerId: 'analytics-host',
     })
     manager.joinRoom({
       roomId: 'ROOM01',
       name: 'Guest',
       faction: FACTION_BETA,
+      analyticsPlayerId: 'analytics-guest',
     })
 
     manager.disconnect({
@@ -249,6 +282,7 @@ describe('RoomManager', () => {
       roomId: 'ROOM01',
       name: 'Guest',
       faction: FACTION_BETA,
+      analyticsPlayerId: 'analytics-guest-reconnect',
     })
 
     expect(resumed.players).toHaveLength(2)
@@ -263,11 +297,13 @@ describe('RoomManager', () => {
       playerId: 'host-1',
       name: 'Host',
       faction: FACTION_ALPHA,
+      analyticsPlayerId: 'analytics-host',
     })
     manager.joinRoom({
       roomId: 'ROOM01',
       name: 'Guest',
       faction: FACTION_BETA,
+      analyticsPlayerId: 'analytics-guest',
     })
     const first = manager.submitPlan({
       roomId: 'ROOM01',

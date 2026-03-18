@@ -1,8 +1,10 @@
 import { createServer, type IncomingMessage, type Server as HttpServer } from 'node:http'
 
+import type { SimulationTelemetry } from '../src/game/types'
 import type { ClientMessage, PlayerSession, ServerMessage } from './contracts'
 import { createDefaultRoomGameHooks } from './default-game-hooks'
 import { RoomManager } from './room-manager'
+import { SqliteTelemetryRepository } from './telemetry-repository'
 
 type WebSocket = import('ws').WebSocket
 type WebSocketServer = import('ws').WebSocketServer
@@ -15,6 +17,7 @@ interface ClientConnection {
 }
 
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 15_000
+const DEFAULT_TELEMETRY_DATABASE_PATH = './data/playtest-telemetry.sqlite'
 const OPEN_READY_STATE = 1
 
 export interface LanServerOptions {
@@ -22,6 +25,7 @@ export interface LanServerOptions {
   now?: () => number
   logger?: LanServerLogger
   heartbeatIntervalMs?: number
+  telemetryDatabasePath?: string
 }
 
 export interface LanServerLogger {
@@ -90,6 +94,10 @@ export async function createLanServer(
   const { WebSocketServer } = await import('ws')
   const manager = new RoomManager(createDefaultRoomGameHooks(), options.now)
   const logger = options.logger ?? defaultLogger()
+  const telemetryRepository = new SqliteTelemetryRepository({
+    databasePath: options.telemetryDatabasePath ?? DEFAULT_TELEMETRY_DATABASE_PATH,
+  })
+  telemetryRepository.initialize()
   const connections = new Set<ClientConnection>()
   const roomTimers = new Map<string, ReturnType<typeof setTimeout>>()
   const heartbeatInterval = setInterval(() => {
@@ -139,6 +147,110 @@ export async function createLanServer(
     roomTimers.set(roomId, timer)
   }
 
+  function persistTelemetry(
+    event: string,
+    roomId: string | null,
+    playerId: string | null,
+    action: () => void,
+  ): void {
+    try {
+      action()
+    } catch (error) {
+      logger.warn('telemetry_write_failed', {
+        error: error instanceof Error ? error.message : 'Unknown telemetry error.',
+        event,
+        roomId,
+        playerId,
+      })
+    }
+  }
+
+  function persistSubmittedPlan(
+    room: ReturnType<RoomManager['getRoom']>,
+    playerId: string,
+    plan: Extract<ClientMessage, { type: 'submit_plan' }>['plan'],
+    submittedAt: string,
+  ): void {
+    if (room === null) {
+      return
+    }
+
+    const player = room?.players.find((candidate) => candidate.id === playerId)
+    const analyticsPlayerId = manager.getAnalyticsPlayerId(room.roomId, playerId)
+
+    if (room === null || player === undefined || analyticsPlayerId === null) {
+      return
+    }
+
+    telemetryRepository.upsertPlayerDayPlan({
+      gameId: room.roomId,
+      dayNumber: room.day,
+      playerId,
+      analyticsPlayerId,
+      factionId: player.faction.id,
+      weather: room.weather,
+      marketBasePrices: room.marketBasePrices,
+      moneyBeforePlanning: player.money,
+      reputationBeforePlanning: player.reputation,
+      inventoryBeforePlanning: player.inventory,
+      purchases: plan.purchases,
+      recipe: plan.recipe,
+      price: plan.price,
+      submittedAt,
+    })
+    telemetryRepository.touchGameActivity(room.roomId)
+  }
+
+  function persistSimulationTelemetry(
+    roomId: string,
+    telemetry: SimulationTelemetry,
+    resolvedAt: string,
+  ): void {
+    const room = manager.getRoom(roomId)
+
+    if (room === null) {
+      return
+    }
+
+    telemetryRepository.insertCustomerProfiles({
+      gameId: roomId,
+      profiles: telemetry.customerProfiles,
+    })
+    for (const player of room.players) {
+      if (player.dailyResults === null) {
+        continue
+      }
+
+      telemetryRepository.upsertPlayerDayOutcome({
+        gameId: roomId,
+        dayNumber: room.day,
+        playerId: player.id,
+        moneyAfterResults: player.money,
+        reputationAfterResults: player.reputation,
+        inventoryAfterResults: player.inventory,
+        cupsSold: player.dailyResults.cupsSold,
+        revenue: player.dailyResults.revenue,
+        satisfaction: player.dailyResults.satisfaction,
+        reputationDelta: player.dailyResults.reputationDelta,
+        customersWon: player.dailyResults.customersWon,
+        customersSkipped: player.dailyResults.customersSkipped,
+        customersSoldOut: player.dailyResults.customersSoldOut,
+        resolvedAt,
+      })
+    }
+    telemetryRepository.insertCustomerEvents({
+      gameId: roomId,
+      dayNumber: room.day,
+      events: telemetry.customerEvents,
+    })
+    telemetryRepository.insertCustomerOfferScores({
+      gameId: roomId,
+      dayNumber: room.day,
+      scores: telemetry.customerOfferScores,
+    })
+    telemetryRepository.touchGameActivity(roomId)
+  }
+
   websocketServer.on('connection', (socket, request) => {
     const connection: ClientConnection = {
       socket,
@@ -170,8 +282,23 @@ export async function createLanServer(
             playerId,
             name: message.name,
             faction: message.faction,
+            analyticsPlayerId: message.analyticsPlayerId,
           })
 
+          persistTelemetry('room_created', roomId, playerId, () => {
+            telemetryRepository.upsertGame({
+              gameId: roomId,
+              roomId,
+              rngSeed: room.rngSeed ?? 0,
+            })
+            telemetryRepository.insertCustomerProfiles({
+              gameId: roomId,
+              profiles: (room.customerRoster ?? []).map((customer) => ({
+                customerId: customer.id,
+                tasteOffsets: customer.tasteOffsets,
+              })),
+            })
+          })
           connection.session = {
             roomId,
             playerId,
@@ -198,6 +325,7 @@ export async function createLanServer(
             playerId: message.playerId,
             name: message.name,
             faction: message.faction,
+            analyticsPlayerId: message.analyticsPlayerId,
           })
           const playerId =
             message.playerId ??
@@ -228,6 +356,7 @@ export async function createLanServer(
         }
 
         if (message.type === 'submit_plan') {
+          const roomBeforeSubmit = manager.getRoom(message.roomId)
           const result = manager.submitPlan({
             roomId: message.roomId,
             playerId: message.playerId,
@@ -238,10 +367,18 @@ export async function createLanServer(
             playerId: message.playerId,
             roomId: message.roomId,
           })
+          persistTelemetry('plan_submitted', message.roomId, message.playerId, () => {
+            persistSubmittedPlan(roomBeforeSubmit, message.playerId, message.plan, new Date().toISOString())
+          })
 
           broadcastRoomState(message.roomId)
 
           if (result.simulationStartedAt !== null) {
+            persistTelemetry('simulation_started', message.roomId, message.playerId, () => {
+              if (result.telemetry !== null) {
+                persistSimulationTelemetry(message.roomId, result.telemetry, new Date().toISOString())
+              }
+            })
             logger.info('simulation_started', {
               roomId: message.roomId,
               simulationStartAt: result.simulationStartedAt,
@@ -268,6 +405,9 @@ export async function createLanServer(
           clientAddress: connection.clientAddress,
           playerId: message.playerId,
           roomId: message.roomId,
+        })
+        persistTelemetry('next_day_requested', message.roomId, message.playerId, () => {
+          telemetryRepository.touchGameActivity(message.roomId)
         })
         broadcastRoomState(room.roomId)
       } catch (error) {
@@ -340,6 +480,7 @@ export async function createLanServer(
               return
             }
 
+            telemetryRepository.close()
             resolve()
           })
         })

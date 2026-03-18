@@ -2,6 +2,7 @@ import { defaultBalanceConfig } from './balance'
 import { nextFloat, nextInt, normalizeSeed } from './rng'
 import type {
   BalanceConfig,
+  CustomerOfferResult,
   CustomerEvent,
   CustomerProfile,
   CustomerStandHistory,
@@ -12,6 +13,9 @@ import type {
   PlayerState,
   Recipe,
   RoomState,
+  SimulationTelemetry,
+  TelemetryCustomerEvent,
+  TelemetryCustomerOfferScore,
   Weather,
 } from './types'
 
@@ -601,35 +605,10 @@ function generateCustomerBudget(
 }
 
 function chooseWinner(
+  scoredPlayers: TelemetryCustomerOfferScore[],
   room: RoomState,
-  customer: CustomerProfile,
-  willingnessToPay: number,
-  weather: Weather,
-  balance: BalanceConfig,
 ): [string | null, RoomState] {
-  const preferredRecipe = preferredRecipeForCustomer(customer, weather, balance)
-  const scoredPlayers = room.players.map((player) => {
-    const priced = priceScore(player.dailyPlan.price, willingnessToPay)
-    if (priced === 0) {
-      return {
-        playerId: player.id,
-        score: 0,
-      }
-    }
-
-    return {
-      playerId: player.id,
-      score: Number(
-        (
-          priced * 0.4 +
-          calculatePreferredRecipeFit(player.dailyPlan.recipe, preferredRecipe) * 0.35 +
-          clamp(player.reputation / 100, 0, 1) * 0.1 +
-          historyBonus(customer.standHistory[player.id], room.day)
-        ).toFixed(4),
-      ),
-    }
-  })
-  const totalScore = scoredPlayers.reduce((sum, entry) => sum + entry.score, 0)
+  const totalScore = scoredPlayers.reduce((sum, entry) => sum + entry.totalScore, 0)
 
   if (totalScore <= 0) {
     return [null, room]
@@ -640,14 +619,76 @@ function chooseWinner(
   let cumulativeScore = 0
 
   for (const entry of scoredPlayers) {
-    cumulativeScore += entry.score
+    cumulativeScore += entry.totalScore
     if (winningThreshold < cumulativeScore) {
       return [entry.playerId, { ...room, rng }]
     }
   }
 
-  const fallbackWinner = scoredPlayers.findLast((entry) => entry.score > 0)
+  const fallbackWinner = scoredPlayers.findLast((entry) => entry.totalScore > 0)
   return [fallbackWinner?.playerId ?? null, { ...room, rng }]
+}
+
+function scoreCustomerOffers(
+  room: RoomState,
+  customer: CustomerProfile,
+  customerEventId: string,
+  willingnessToPay: number,
+  weather: Weather,
+  balance: BalanceConfig,
+): {
+  preferredRecipe: Recipe
+  scores: TelemetryCustomerOfferScore[]
+} {
+  const preferredRecipe = preferredRecipeForCustomer(customer, weather, balance)
+  return {
+    preferredRecipe,
+    scores: room.players.map((player) => {
+      const offerPriceScore = priceScore(player.dailyPlan.price, willingnessToPay)
+      const preferredRecipeFit = calculatePreferredRecipeFit(player.dailyPlan.recipe, preferredRecipe)
+      const repeatHistoryBonus = historyBonus(customer.standHistory[player.id], room.day)
+      const totalScore =
+        offerPriceScore === 0
+          ? 0
+          : Number(
+              (
+                offerPriceScore * 0.4 +
+                preferredRecipeFit * 0.35 +
+                clamp(player.reputation / 100, 0, 1) * 0.1 +
+                repeatHistoryBonus
+              ).toFixed(4),
+            )
+
+      return {
+        customerEventId,
+        customerId: customer.id,
+        playerId: player.id,
+        offeredPrice: player.dailyPlan.price,
+        reputation: player.reputation,
+        preferredRecipeFit,
+        priceScore: offerPriceScore,
+        historyBonus: repeatHistoryBonus,
+        totalScore,
+        canFulfill: calculateSellableCups(player.inventory, player.dailyPlan.recipe) >= 1,
+        offerResult: offerPriceScore === 0 ? 'price_rejected' : 'not_selected',
+      }
+    }),
+  }
+}
+
+function applyOfferResults(
+  scores: TelemetryCustomerOfferScore[],
+  winningPlayerId: string | null,
+  selectedResult: CustomerOfferResult,
+): TelemetryCustomerOfferScore[] {
+  return scores.map((score) =>
+    score.playerId === winningPlayerId
+      ? {
+          ...score,
+          offerResult: selectedResult,
+        }
+      : score,
+  )
 }
 
 export function calculateSatisfactionScore(
@@ -750,15 +791,25 @@ function eventTimings(
   }
 }
 
-export function startSimulation(
+export function startSimulationWithTelemetry(
   room: RoomState,
   options: {
     durationMs?: number
   } = {},
   balance: BalanceConfig = defaultBalanceConfig,
-): RoomState {
+): { room: RoomState; telemetry: SimulationTelemetry } {
   if (!roomCanStartSimulation(room) || room.weather === null || room.marketBasePrices === null) {
-    return room
+    return {
+      room,
+      telemetry: {
+        customerProfiles: room.customerRoster.map((customer) => ({
+          customerId: customer.id,
+          tasteOffsets: customer.tasteOffsets,
+        })),
+        customerEvents: [],
+        customerOfferScores: [],
+      },
+    }
   }
 
   const durationMs = options.durationMs ?? balance.simulationDurationMs
@@ -771,6 +822,8 @@ export function startSimulation(
   nextRoom = sampledRoom
   const totalCustomers = customersForDay.length
   const events: CustomerEvent[] = []
+  const telemetryEvents: TelemetryCustomerEvent[] = []
+  const telemetryScores: TelemetryCustomerOfferScore[] = []
   const satisfactionTotals = new Map<string, number>()
 
   nextRoom.players.forEach((player) => {
@@ -779,19 +832,23 @@ export function startSimulation(
 
   for (let customerIndex = 0; customerIndex < totalCustomers; customerIndex += 1) {
     const customer = customersForDay[customerIndex]
+    const customerEventId = `customer-${customerIndex}`
     const [willingnessToPay, budgetRoom] = generateCustomerBudget(nextRoom, room.weather, balance)
     nextRoom = budgetRoom
-    const [winnerId, winnerRoom] = chooseWinner(
+    const { preferredRecipe, scores } = scoreCustomerOffers(
       nextRoom,
       customer,
+      customerEventId,
       willingnessToPay,
       room.weather,
       balance,
     )
+    const [winnerId, winnerRoom] = chooseWinner(scores, nextRoom)
     nextRoom = winnerRoom
     const timing = eventTimings(customerIndex, totalCustomers, durationMs)
 
     if (winnerId === null) {
+      telemetryScores.push(...scores)
       nextRoom = {
         ...nextRoom,
         players: nextRoom.players.map((player) => ({
@@ -803,7 +860,7 @@ export function startSimulation(
         })),
       }
       events.push({
-        id: `customer-${customerIndex}`,
+        id: customerEventId,
         customerId: customer.id,
         customerIndex,
         spawnAt: timing.spawnAt,
@@ -817,11 +874,23 @@ export function startSimulation(
         xJitter: timing.xJitter,
         yJitter: timing.yJitter,
       })
+      telemetryEvents.push({
+        customerEventId,
+        customerId: customer.id,
+        willingnessToPay,
+        preferredRecipe,
+        chosenPlayerId: null,
+        outcome: 'skip',
+        salePrice: 0,
+        satisfaction: 0,
+        outcomeReason: 'all_prices_above_willingness',
+      })
       continue
     }
 
     const chosenPlayer = nextRoom.players.find((player) => player.id === winnerId)
     if (chosenPlayer === undefined || calculateSellableCups(chosenPlayer.inventory, chosenPlayer.dailyPlan.recipe) < 1) {
+      telemetryScores.push(...applyOfferResults(scores, winnerId, 'selected_but_sold_out'))
       nextRoom = {
         ...nextRoom,
         players: nextRoom.players.map((player) =>
@@ -845,7 +914,7 @@ export function startSimulation(
       }
       nextRoom = updateCustomerHistory(nextRoom, customer.id, winnerId, room.day, null)
       events.push({
-        id: `customer-${customerIndex}`,
+        id: customerEventId,
         customerId: customer.id,
         customerIndex,
         spawnAt: timing.spawnAt,
@@ -859,6 +928,17 @@ export function startSimulation(
         xJitter: timing.xJitter,
         yJitter: timing.yJitter,
       })
+      telemetryEvents.push({
+        customerEventId,
+        customerId: customer.id,
+        willingnessToPay,
+        preferredRecipe,
+        chosenPlayerId: winnerId,
+        outcome: 'soldOut',
+        salePrice: 0,
+        satisfaction: 0,
+        outcomeReason: 'selected_stand_sold_out',
+      })
       continue
     }
     const recipeFit = calculatePreferredRecipeFit(
@@ -871,6 +951,7 @@ export function startSimulation(
       willingnessToPay,
     )
     satisfactionTotals.set(winnerId, (satisfactionTotals.get(winnerId) ?? 0) + satisfaction)
+    telemetryScores.push(...applyOfferResults(scores, winnerId, 'selected'))
 
     nextRoom = {
       ...nextRoom,
@@ -899,7 +980,7 @@ export function startSimulation(
     nextRoom = updateCustomerHistory(nextRoom, customer.id, winnerId, room.day, satisfaction)
 
     events.push({
-      id: `customer-${customerIndex}`,
+      id: customerEventId,
       customerId: customer.id,
       customerIndex,
       spawnAt: timing.spawnAt,
@@ -913,9 +994,20 @@ export function startSimulation(
       xJitter: timing.xJitter,
       yJitter: timing.yJitter,
     })
+    telemetryEvents.push({
+      customerEventId,
+      customerId: customer.id,
+      willingnessToPay,
+      preferredRecipe,
+      chosenPlayerId: winnerId,
+      outcome: 'buy',
+      salePrice: chosenPlayer.dailyPlan.price,
+      satisfaction,
+      outcomeReason: 'purchased',
+    })
   }
 
-  return {
+  const simulatedRoom: RoomState = {
     ...nextRoom,
     phase: 'simulating',
     pausedPhase: null,
@@ -926,6 +1018,28 @@ export function startSimulation(
       totalCustomers,
     },
   }
+
+  return {
+    room: simulatedRoom,
+    telemetry: {
+      customerProfiles: simulatedRoom.customerRoster.map((customer) => ({
+        customerId: customer.id,
+        tasteOffsets: customer.tasteOffsets,
+      })),
+      customerEvents: telemetryEvents,
+      customerOfferScores: telemetryScores,
+    },
+  }
+}
+
+export function startSimulation(
+  room: RoomState,
+  options: {
+    durationMs?: number
+  } = {},
+  balance: BalanceConfig = defaultBalanceConfig,
+): RoomState {
+  return startSimulationWithTelemetry(room, options, balance).room
 }
 
 export function enterResultsPhase(room: RoomState): RoomState {

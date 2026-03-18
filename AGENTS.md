@@ -4,10 +4,13 @@
 
 - At the beginning of each new work session, use the `$new-task` skill at `/Users/jordanlevy/.codex/skills/new-task/SKILL.md` before implementation work begins.
 - If the user explicitly says they are continuing an existing task, update that task instead of creating a duplicate.
+- When a task is finished and the user wants it archived, use the `$resolve-task` skill at `/Users/jordanlevy/.codex/skills/resolve-task/SKILL.md`.
 
 ## Task Directory Rules
 
-- Keep all task work inside `tasks/<task_slug>/`.
+- Keep active task work inside `tasks/active/<task_slug>/`.
+- Keep archived task work inside `tasks/resolved/<task_slug>/`.
+- During migration, legacy task folders may still exist directly under `tasks/<task_slug>/`; treat them as active until they are moved or resolved.
 - Every task directory must contain at minimum:
   - `spec.md`
   - `progress_log.md`
@@ -27,8 +30,16 @@
 ## Expected Workflow
 
 - New session or new workstream: create a new task with `$new-task`.
-- Existing task continuation: locate the relevant task folder and continue updating its `progress_log.md`.
+- Existing task continuation: locate the relevant folder in `tasks/active/` first, then fall back to any legacy task folder still stored directly under `tasks/`.
+- Completed task archival: use `$resolve-task` to move the task folder into `tasks/resolved/` while preserving its history.
 - Use the task directory as the canonical home for task-specific artifacts.
+
+## Telemetry Review
+
+- For any new gameplay, UI, or server feature, run the `$playtest-telemetry-review` skill at `/Users/jordanlevy/.codex/skills/playtest-telemetry-review/SKILL.md` before finalizing implementation.
+- Use `docs/playtest-data-catalog.json` as the canonical catalog of logged playtest fields and entities.
+- If telemetry changes are needed, update the catalog in the same workstream.
+- If no telemetry changes are needed, record the skill's rationale in the active task `progress_log.md` or final implementation summary.
 
 ## Ideas Directory
 

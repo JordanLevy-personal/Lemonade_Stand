@@ -7,13 +7,24 @@ import type {
   RoomState,
   Weather,
 } from './contracts'
+import type { CustomerProfile, SimulationTelemetry } from '../src/game/types'
 
 export interface RoomGameHooks {
+  createInitialState: (seed: number) => {
+    customerRoster: CustomerProfile[]
+    rngSeed: number
+  }
   createDay: (day: number) => {
     weather: Weather
     marketBasePrices: MarketBasePrices
   }
-  startSimulation: (room: RoomState, simulationStartAt: number) => RoomState
+  startSimulation: (
+    room: RoomState,
+    simulationStartAt: number,
+  ) => {
+    room: RoomState
+    telemetry: SimulationTelemetry
+  }
   startNextDay: (room: RoomState) => RoomState
   createPlayerDefaults: () => Pick<PlayerState, 'money' | 'inventory' | 'reputation'>
 }
@@ -23,6 +34,7 @@ interface CreateRoomInput {
   playerId: string
   name: string
   faction: FactionSelection
+  analyticsPlayerId: string
 }
 
 interface JoinRoomInput {
@@ -30,6 +42,7 @@ interface JoinRoomInput {
   playerId?: string
   name: string
   faction: FactionSelection
+  analyticsPlayerId: string
 }
 
 interface SubmitPlanInput {
@@ -51,6 +64,7 @@ interface DisconnectInput {
 export interface RoomMutationResult {
   room: RoomState
   simulationStartedAt: number | null
+  telemetry: SimulationTelemetry | null
 }
 
 function activePhase(room: RoomState): Exclude<RoomPhase, 'paused'> {
@@ -123,6 +137,7 @@ function seedFromRoomId(roomId: string): number {
 
 export class RoomManager {
   private readonly rooms = new Map<string, RoomState>()
+  private readonly analyticsPlayerIds = new Map<string, string>()
   private readonly hooks: RoomGameHooks
   private readonly getNow: () => number
 
@@ -138,6 +153,8 @@ export class RoomManager {
   createRoom(input: CreateRoomInput): RoomState {
     const { weather, marketBasePrices } = this.hooks.createDay(1)
     const defaults = this.hooks.createPlayerDefaults()
+    const initialSeed = seedFromRoomId(input.roomId)
+    const initialState = this.hooks.createInitialState(initialSeed)
     const room: RoomState = {
       roomId: input.roomId,
       hostPlayerId: input.playerId,
@@ -160,11 +177,12 @@ export class RoomManager {
       simulation: null,
       pausedFromPhase: null,
       requestedNextDayPlayerIds: [],
-      customerRoster: [],
-      rngSeed: seedFromRoomId(input.roomId),
+      customerRoster: initialState.customerRoster,
+      rngSeed: initialState.rngSeed,
     }
 
     this.rooms.set(room.roomId, room)
+    this.analyticsPlayerIds.set(this.analyticsKey(room.roomId, input.playerId), input.analyticsPlayerId)
     return room
   }
 
@@ -193,12 +211,14 @@ export class RoomManager {
       const resumed = reconnectExistingPlayer(room, existingPlayer.id, input)
 
       this.rooms.set(input.roomId, resumed)
+      this.analyticsPlayerIds.set(this.analyticsKey(input.roomId, existingPlayer.id), input.analyticsPlayerId)
       return resumed
     }
 
     if (matchingDisconnectedPlayer !== null) {
       const resumed = reconnectExistingPlayer(room, matchingDisconnectedPlayer.id, input)
       this.rooms.set(input.roomId, resumed)
+      this.analyticsPlayerIds.set(this.analyticsKey(input.roomId, matchingDisconnectedPlayer.id), input.analyticsPlayerId)
       return resumed
     }
 
@@ -225,6 +245,10 @@ export class RoomManager {
     })
 
     this.rooms.set(input.roomId, joinedRoom)
+    this.analyticsPlayerIds.set(
+      this.analyticsKey(input.roomId, joinedRoom.players[joinedRoom.players.length - 1]!.id),
+      input.analyticsPlayerId,
+    )
     return joinedRoom
   }
 
@@ -255,16 +279,18 @@ export class RoomManager {
       return {
         room: updatedRoom,
         simulationStartedAt: null,
+        telemetry: null,
       }
     }
 
     const simulationStartedAt = this.getNow() + 1_000
     const simulatedRoom = this.hooks.startSimulation(updatedRoom, simulationStartedAt)
 
-    this.rooms.set(simulatedRoom.roomId, simulatedRoom)
+    this.rooms.set(simulatedRoom.room.roomId, simulatedRoom.room)
     return {
-      room: simulatedRoom,
+      room: simulatedRoom.room,
       simulationStartedAt,
+      telemetry: simulatedRoom.telemetry,
     }
   }
 
@@ -333,6 +359,10 @@ export class RoomManager {
     return disconnectedRoom
   }
 
+  getAnalyticsPlayerId(roomId: string, playerId: string): string | null {
+    return this.analyticsPlayerIds.get(this.analyticsKey(roomId, playerId)) ?? null
+  }
+
   private requireRoom(roomId: string): RoomState {
     const room = this.rooms.get(roomId)
 
@@ -341,6 +371,10 @@ export class RoomManager {
     }
 
     return room
+  }
+
+  private analyticsKey(roomId: string, playerId: string): string {
+    return `${roomId}:${playerId}`
   }
 
   private generateJoinPlayerId(room: RoomState): string {

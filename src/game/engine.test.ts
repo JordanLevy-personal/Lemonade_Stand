@@ -13,6 +13,7 @@ import {
   roomCanStartSimulation,
   setPlayerReady,
   startSimulation,
+  startSimulationWithTelemetry,
   updatePlayerPlan,
 } from './engine'
 import type { RoomState } from './types'
@@ -355,6 +356,110 @@ describe('multiplayer engine', () => {
 
     expect(host?.dailyResults.cupsSold).toBe(1)
     expect(host?.dailyResults.customersSoldOut).toBeGreaterThan(0)
+  })
+
+  it('emits customer telemetry reasons and offer-score details for price rejection and sold-out outcomes', () => {
+    let priceRejectedRoom = createPlanningRoom(13)
+    priceRejectedRoom = {
+      ...priceRejectedRoom,
+      weather: 'sunny',
+      marketBasePrices: {
+        lemons: 0.3,
+        sugar: 0.2,
+        ice: 0.1,
+      },
+      customerRoster: [
+        {
+          id: 'price-sensitive',
+          tasteOffsets: { lemons: 0, sugar: 0, ice: 0 },
+          standHistory: {},
+        },
+      ],
+    }
+    priceRejectedRoom = updatePlayerPlan(priceRejectedRoom, 'player-host', {
+      purchases: { lemons: 6, sugar: 6, ice: 6 },
+      recipe: { lemons: 2, sugar: 2, ice: 2 },
+      price: 4,
+    })
+    priceRejectedRoom = updatePlayerPlan(priceRejectedRoom, 'player-guest', {
+      purchases: { lemons: 6, sugar: 6, ice: 6 },
+      recipe: { lemons: 2, sugar: 2, ice: 2 },
+      price: 4,
+    })
+    priceRejectedRoom = setPlayerReady(setPlayerReady(priceRejectedRoom, 'player-host', true), 'player-guest', true)
+
+    const priceRejected = startSimulationWithTelemetry(priceRejectedRoom, {}, {
+      ...defaultBalanceConfig,
+      weatherProfiles: {
+        ...defaultBalanceConfig.weatherProfiles,
+        sunny: {
+          ...defaultBalanceConfig.weatherProfiles.sunny,
+          customerCount: 1,
+          baseWillingnessToPay: 1.5,
+          willingnessVariance: 0,
+        },
+      },
+    })
+
+    expect(priceRejected.telemetry.customerProfiles).toEqual([
+      {
+        customerId: 'price-sensitive',
+        tasteOffsets: { lemons: 0, sugar: 0, ice: 0 },
+      },
+    ])
+    expect(priceRejected.telemetry.customerEvents).toEqual([
+      expect.objectContaining({
+        customerId: 'price-sensitive',
+        outcomeReason: 'all_prices_above_willingness',
+        chosenPlayerId: null,
+      }),
+    ])
+    expect(priceRejected.telemetry.customerOfferScores).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          playerId: 'player-host',
+          offerResult: 'price_rejected',
+          totalScore: 0,
+        }),
+        expect.objectContaining({
+          playerId: 'player-guest',
+          offerResult: 'price_rejected',
+          totalScore: 0,
+        }),
+      ]),
+    )
+
+    let soldOutRoom = createPlanningRoom(5)
+    soldOutRoom = updatePlayerPlan(soldOutRoom, 'player-host', {
+      purchases: {
+        lemons: 2,
+        sugar: 2,
+        ice: 2,
+      },
+      recipe: {
+        lemons: 2,
+        sugar: 2,
+        ice: 2,
+      },
+      price: 0.5,
+    })
+    soldOutRoom = updatePlayerPlan(soldOutRoom, 'player-guest', {
+      price: 3,
+    })
+    soldOutRoom = setPlayerReady(setPlayerReady(soldOutRoom, 'player-host', true), 'player-guest', true)
+
+    const soldOut = startSimulationWithTelemetry(soldOutRoom)
+    const soldOutEvent = soldOut.telemetry.customerEvents.find((event) => event.outcomeReason === 'selected_stand_sold_out')
+
+    expect(soldOutEvent).toBeDefined()
+    expect(
+      soldOut.telemetry.customerOfferScores.some(
+        (score) =>
+          score.customerEventId === soldOutEvent?.customerEventId &&
+          score.playerId === 'player-host' &&
+          score.offerResult === 'selected_but_sold_out',
+      ),
+    ).toBe(true)
   })
 
   it('carries money, inventory, and reputation into the next planning day', () => {

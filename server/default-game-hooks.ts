@@ -6,7 +6,7 @@ import {
   enterResultsPhase,
   joinRoom as joinGameRoom,
   setPlayerReady,
-  startSimulation as startGameSimulation,
+  startSimulationWithTelemetry,
   updatePlayerPlan,
 } from '../src/game/engine'
 import type { FactionDefinition, RoomState as GameRoomState } from '../src/game/types'
@@ -36,6 +36,9 @@ function toServerResults(
     revenue: results.revenue,
     satisfaction: results.satisfaction,
     reputationDelta: results.reputationDelta,
+    customersWon: results.customersWon,
+    customersSkipped: results.customersSkipped,
+    customersSoldOut: results.customersSoldOut,
   }
 }
 
@@ -79,9 +82,9 @@ function toGameRoom(room: RoomState): GameRoomState {
             revenue: player.dailyResults.revenue,
             satisfaction: player.dailyResults.satisfaction,
             reputationDelta: player.dailyResults.reputationDelta,
-            customersWon: player.dailyResults.cupsSold,
-            customersSkipped: 0,
-            customersSoldOut: 0,
+            customersWon: player.dailyResults.customersWon,
+            customersSkipped: player.dailyResults.customersSkipped,
+            customersSoldOut: player.dailyResults.customersSoldOut,
           },
     })),
     marketBasePrices: room.marketBasePrices,
@@ -191,6 +194,21 @@ function createPreviewDay(day: number): {
 
 export function createDefaultRoomGameHooks(): RoomGameHooks {
   return {
+    createInitialState(seed) {
+      const initialRoom = createGameRoom({
+        roomId: `telemetry-${seed}`,
+        hostPlayerId: 'telemetry-host',
+        hostPlayerName: 'Telemetry Host',
+        hostSessionId: 'telemetry-host',
+        hostFactionId: 'sun-guild',
+        seed,
+      })
+
+      return {
+        customerRoster: initialRoom.customerRoster,
+        rngSeed: initialRoom.rng.seed,
+      }
+    },
     createDay(day) {
       return createPreviewDay(day)
     },
@@ -204,20 +222,23 @@ export function createDefaultRoomGameHooks(): RoomGameHooks {
         gameRoom = setPlayerReady(gameRoom, player.id, player.hasSubmittedPlan)
       }
 
-      const simulated = startGameSimulation(gameRoom)
-      const nextRoom = toServerRoom(simulated)
+      const simulated = startSimulationWithTelemetry(gameRoom)
+      const nextRoom = toServerRoom(simulated.room)
 
       return {
-        ...nextRoom,
-        phase: 'simulating',
-        simulation:
-          nextRoom.simulation === null
-            ? null
-            : {
-                ...nextRoom.simulation,
-                simulationStartAt,
-              },
-        requestedNextDayPlayerIds: [],
+        room: {
+          ...nextRoom,
+          phase: 'simulating',
+          simulation:
+            nextRoom.simulation === null
+              ? null
+              : {
+                  ...nextRoom.simulation,
+                  simulationStartAt,
+                },
+          requestedNextDayPlayerIds: [],
+        },
+        telemetry: simulated.telemetry,
       }
     },
     startNextDay(room) {

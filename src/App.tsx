@@ -23,6 +23,7 @@ import type {
 import { openRoomConnection, type RoomConnection, type RoomConnectionHandlers } from './client/socket'
 
 export const ROOM_SESSION_KEY = 'lemonade-stand-room-session-v1'
+export const ANALYTICS_PLAYER_ID_KEY = 'lemonade-stand-analytics-player-id-v1'
 
 const DEFAULT_HOST_FACTION = 'sun-guild'
 const DEFAULT_JOIN_FACTION = 'market-tide'
@@ -63,6 +64,26 @@ function readStoredRoomSession(): StoredRoomSession | null {
 
 function writeStoredRoomSession(session: StoredRoomSession): void {
   window.localStorage.setItem(ROOM_SESSION_KEY, JSON.stringify(session))
+}
+
+function createAnalyticsPlayerId(): string {
+  if (typeof window.crypto.randomUUID === 'function') {
+    return window.crypto.randomUUID()
+  }
+
+  return `analytics-${Math.random().toString(36).slice(2, 10)}-${Date.now().toString(36)}`
+}
+
+function readOrCreateAnalyticsPlayerId(): string {
+  const stored = window.localStorage.getItem(ANALYTICS_PLAYER_ID_KEY)
+
+  if (stored !== null && stored.trim() !== '') {
+    return stored
+  }
+
+  const analyticsPlayerId = createAnalyticsPlayerId()
+  window.localStorage.setItem(ANALYTICS_PLAYER_ID_KEY, analyticsPlayerId)
+  return analyticsPlayerId
 }
 
 function searchParam(name: string): string | null {
@@ -805,32 +826,18 @@ function App(): JSX.Element {
     price: defaultBalanceConfig.defaultPrice,
   })
   const [simulationStartAtMs, setSimulationStartAtMs] = useState<number | null>(null)
-  const [clockNowMs, setClockNowMs] = useState(Date.now())
+  const [clockNowMs, setClockNowMs] = useState(() => Date.now())
   const [error, setError] = useState<string | null>(null)
   const connectionRef = useRef<RoomConnection | null>(null)
   const pendingIdentityRef = useRef<IdentityDraft | null>(null)
+  const sessionRef = useRef<StoredRoomSession | null>(null)
+  const analyticsPlayerIdRef = useRef<string>(readOrCreateAnalyticsPlayerId())
 
   const currentPlayer = findCurrentPlayer(room, session?.playerId ?? null)
   const elapsedMs = currentElapsedMs(room, simulationStartAtMs, clockNowMs)
 
   useEffect(() => {
-    if (currentPlayer !== null) {
-      setLocalPlan(buildPlan(currentPlayer))
-    }
-  }, [
-    currentPlayer?.id,
-    currentPlayer?.dailyPlan?.price,
-    currentPlayer?.dailyPlan?.recipe.lemons,
-    currentPlayer?.dailyPlan?.recipe.sugar,
-    currentPlayer?.dailyPlan?.recipe.ice,
-    currentPlayer?.dailyPlan?.purchases.lemons,
-    currentPlayer?.dailyPlan?.purchases.sugar,
-    currentPlayer?.dailyPlan?.purchases.ice,
-  ])
-
-  useEffect(() => {
     if (room?.phase !== 'simulating') {
-      setSimulationStartAtMs(null)
       return
     }
 
@@ -879,6 +886,7 @@ function App(): JSX.Element {
   }, [elapsedMs, room, session?.playerId])
 
   function updateSession(nextSession: StoredRoomSession): void {
+    sessionRef.current = nextSession
     setSession(nextSession)
     setReconnectSession(nextSession)
     writeStoredRoomSession(nextSession)
@@ -904,11 +912,16 @@ function App(): JSX.Element {
 
           if (message.type === 'room_state') {
             setRoom(message.room)
+            const syncedPlayer = findCurrentPlayer(message.room, sessionRef.current?.playerId ?? null)
+
+            if (syncedPlayer !== null) {
+              setLocalPlan(buildPlan(syncedPlayer))
+            }
             setError(null)
 
-            if (session !== null) {
+            if (sessionRef.current !== null) {
               updateSession({
-                ...session,
+                ...sessionRef.current,
                 roomId: message.room.roomId,
                 hostPlayerId: message.room.hostPlayerId,
               })
@@ -919,6 +932,11 @@ function App(): JSX.Element {
           if (message.type === 'simulation_started') {
             const simulationMessage = message as SimulationStartedMessage
             setRoom(simulationMessage.room)
+            const syncedPlayer = findCurrentPlayer(simulationMessage.room, sessionRef.current?.playerId ?? null)
+
+            if (syncedPlayer !== null) {
+              setLocalPlan(buildPlan(syncedPlayer))
+            }
             setSimulationStartAtMs(simulationMessage.simulationStartAt)
             setClockNowMs(Date.now())
             setError(null)
@@ -956,6 +974,7 @@ function App(): JSX.Element {
         type: 'create_room',
         name: lobbyForm.name,
         faction: factionDefinition(lobbyForm.factionId),
+        analyticsPlayerId: analyticsPlayerIdRef.current,
       },
       {
         name: lobbyForm.name,
@@ -980,6 +999,7 @@ function App(): JSX.Element {
         roomId: lobbyForm.roomId.trim().toUpperCase(),
         name: lobbyForm.name,
         faction: factionDefinition(factionId),
+        analyticsPlayerId: analyticsPlayerIdRef.current,
         playerId,
       },
       {
@@ -1006,6 +1026,7 @@ function App(): JSX.Element {
         roomId: reconnectSession.roomId,
         name: reconnectSession.name,
         faction: factionDefinition(reconnectSession.factionId),
+        analyticsPlayerId: analyticsPlayerIdRef.current,
         playerId: reconnectSession.playerId,
       },
       {
