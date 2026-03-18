@@ -40,7 +40,6 @@ jobs:
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           port: ${{ env.SSH_PORT }}
-          script_stop: true
           envs: DEPLOY_PATH,SYSTEMD_SERVICE
           script: |
             set -euo pipefail

@@ -14,10 +14,14 @@ interface ClientConnection {
   userAgent: string
 }
 
+const DEFAULT_HEARTBEAT_INTERVAL_MS = 15_000
+const OPEN_READY_STATE = 1
+
 export interface LanServerOptions {
   port?: number
   now?: () => number
   logger?: LanServerLogger
+  heartbeatIntervalMs?: number
 }
 
 export interface LanServerLogger {
@@ -88,6 +92,13 @@ export async function createLanServer(
   const logger = options.logger ?? defaultLogger()
   const connections = new Set<ClientConnection>()
   const roomTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  const heartbeatInterval = setInterval(() => {
+    connections.forEach((connection) => {
+      if (connection.socket.readyState === OPEN_READY_STATE) {
+        connection.socket.ping()
+      }
+    })
+  }, options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS)
   const httpServer = createServer((_request, response) => {
     response.writeHead(200, { 'content-type': 'application/json' })
     response.end(JSON.stringify({ status: 'ok' }))
@@ -314,6 +325,7 @@ export async function createLanServer(
     httpServer,
     close: async () => {
       await new Promise<void>((resolve, reject) => {
+        clearInterval(heartbeatInterval)
         roomTimers.forEach((timer) => clearTimeout(timer))
         roomTimers.clear()
         websocketServer.close((error) => {

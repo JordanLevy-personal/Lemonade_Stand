@@ -19,6 +19,13 @@ function waitForMessage(socket: WebSocket): Promise<string> {
   })
 }
 
+function waitForPing(socket: WebSocket): Promise<void> {
+  return new Promise((resolve, reject) => {
+    socket.once('ping', () => resolve())
+    socket.once('error', (error) => reject(error))
+  })
+}
+
 describe('createLanServer', () => {
   const sockets: WebSocket[] = []
   const servers: Array<{ close: () => Promise<void> }> = []
@@ -101,5 +108,19 @@ describe('createLanServer', () => {
         playerId: connectedMessage.playerId,
       }),
     )
+  })
+
+  it('sends heartbeat pings to idle sockets', async () => {
+    const server = await createLanServer({
+      port: 0,
+      heartbeatIntervalMs: 20,
+    })
+    servers.push(server)
+
+    const socket = new WebSocket(`ws://127.0.0.1:${server.port}`)
+    sockets.push(socket)
+    await waitForOpen(socket)
+
+    await expect(waitForPing(socket)).resolves.toBeUndefined()
   })
 })
