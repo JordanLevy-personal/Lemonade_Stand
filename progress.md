@@ -45,3 +45,11 @@ Original prompt: ok lets add a quick feature for computing the amount of cups th
 - Refined the recipe rule to support fractional ingredients by changing lemons and sugar to a `0.1` minimum instead of forcing whole-number `1`, while preserving decimal recipe entries above that floor.
 - Hardened fractional inventory math so sellable-cup calculations stay correct with decimal recipes and repeated subtraction does not drift from float precision noise.
 - Rebalanced satisfaction to use a quadratic curve over recipe fit and price score, making low and middling values fall off faster while leaving stand-choice scoring unchanged for now.
+
+## 2026-03-18 11:42:39 PDT
+
+- Started a new task workspace at `tasks/recipe-sliders/` to convert the planning recipe controls from number inputs to sliders on a fresh `codex/recipe-sliders` branch.
+- Added App-level TDD coverage for slider semantics, including the requested `0.1..5` bounds for lemons and sugar and whole-number `0..5` stepping for ice.
+- Introduced a reusable `RangeSliderField`, swapped the three recipe controls to it, and styled the slider presentation to match the current planning UI.
+- Validation passed with targeted App tests, the full Vitest suite, a production build, the required `web_game_playwright_client` run, and a two-page Playwright browser sanity pass with screenshot artifact `output/web-game/recipe-sliders-planning/host-planning.png`.
+- Browser sanity showed the planning screen rendering the slider controls correctly with no host/guest console errors during the live host/join flow.
