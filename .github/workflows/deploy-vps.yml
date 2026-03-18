@@ -52,4 +52,15 @@ jobs:
             npm run build
             sudo systemctl restart "$SYSTEMD_SERVICE"
             sudo systemctl reload nginx
-            curl --fail http://127.0.0.1:3001/health
+            for attempt in $(seq 1 20); do
+              if curl --fail --silent --show-error http://127.0.0.1:3001/health > /dev/null; then
+                exit 0
+              fi
+
+              echo "Health check attempt ${attempt}/20 failed; retrying in 2s"
+              sleep 2
+            done
+
+            sudo systemctl status "$SYSTEMD_SERVICE" --no-pager || true
+            sudo journalctl -u "$SYSTEMD_SERVICE" -n 50 --no-pager || true
+            exit 1

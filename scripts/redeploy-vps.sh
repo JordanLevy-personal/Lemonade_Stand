@@ -8,6 +8,8 @@ readonly REPO_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 DEPLOY_BRANCH="${DEPLOY_BRANCH:-main}"
 SYSTEMD_SERVICE="${SYSTEMD_SERVICE:-roguelike-lemonade-stand.service}"
 HEALTHCHECK_URL="${HEALTHCHECK_URL:-http://127.0.0.1:3001/health}"
+HEALTHCHECK_ATTEMPTS="${HEALTHCHECK_ATTEMPTS:-20}"
+HEALTHCHECK_DELAY_SECONDS="${HEALTHCHECK_DELAY_SECONDS:-2}"
 DRY_RUN=false
 
 log() {
@@ -21,6 +23,25 @@ run() {
   fi
 
   "$@"
+}
+
+wait_for_health() {
+  local attempt=1
+
+  while [[ "${attempt}" -le "${HEALTHCHECK_ATTEMPTS}" ]]; do
+    if curl --fail --silent --show-error "${HEALTHCHECK_URL}" >/dev/null; then
+      return 0
+    fi
+
+    log "Health check attempt ${attempt}/${HEALTHCHECK_ATTEMPTS} failed; retrying in ${HEALTHCHECK_DELAY_SECONDS}s"
+    sleep "${HEALTHCHECK_DELAY_SECONDS}"
+    attempt=$((attempt + 1))
+  done
+
+  log "Health check failed after ${HEALTHCHECK_ATTEMPTS} attempts"
+  sudo systemctl status "${SYSTEMD_SERVICE}" --no-pager || true
+  sudo journalctl -u "${SYSTEMD_SERVICE}" -n 50 --no-pager || true
+  return 1
 }
 
 while [[ $# -gt 0 ]]; do
@@ -61,6 +82,10 @@ log "Reloading nginx"
 run sudo systemctl reload nginx
 
 log "Checking backend health at ${HEALTHCHECK_URL}"
-run curl --fail --silent --show-error "${HEALTHCHECK_URL}"
+if [[ "${DRY_RUN}" == true ]]; then
+  printf '[dry-run] wait_for_health\n'
+else
+  wait_for_health
+fi
 
 log "Redeploy complete"
