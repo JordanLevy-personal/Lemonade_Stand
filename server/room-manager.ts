@@ -12,6 +12,8 @@ export interface RoomGameHooks {
   createDay: (day: number) => {
     weather: Weather
     marketBasePrices: MarketBasePrices
+    customerRoster: NonNullable<RoomState['customerRoster']>
+    rngSeed: number
   }
   startSimulation: (room: RoomState, simulationStartAt: number) => RoomState
   startNextDay: (room: RoomState) => RoomState
@@ -111,16 +113,6 @@ function planningPhase(room: RoomState): RoomState {
   }
 }
 
-function seedFromRoomId(roomId: string): number {
-  let seed = 0
-
-  for (const character of roomId) {
-    seed = (Math.imul(seed, 31) + character.charCodeAt(0)) >>> 0
-  }
-
-  return seed || 1
-}
-
 export class RoomManager {
   private readonly rooms = new Map<string, RoomState>()
   private readonly hooks: RoomGameHooks
@@ -136,7 +128,7 @@ export class RoomManager {
   }
 
   createRoom(input: CreateRoomInput): RoomState {
-    const { weather, marketBasePrices } = this.hooks.createDay(1)
+    const { weather, marketBasePrices, customerRoster, rngSeed } = this.hooks.createDay(1)
     const defaults = this.hooks.createPlayerDefaults()
     const room: RoomState = {
       roomId: input.roomId,
@@ -160,8 +152,8 @@ export class RoomManager {
       simulation: null,
       pausedFromPhase: null,
       requestedNextDayPlayerIds: [],
-      customerRoster: [],
-      rngSeed: seedFromRoomId(input.roomId),
+      customerRoster,
+      rngSeed,
     }
 
     this.rooms.set(room.roomId, room)

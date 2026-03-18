@@ -165,6 +165,8 @@ function toServerRoom(gameRoom: GameRoomState): RoomState {
 function createPreviewDay(day: number): {
   weather: Weather
   marketBasePrices: MarketBasePrices
+  customerRoster: NonNullable<RoomState['customerRoster']>
+  rngSeed: number
 } {
   const previewRoom = joinGameRoom(
     createGameRoom({
@@ -186,6 +188,8 @@ function createPreviewDay(day: number): {
   return {
     weather: previewRoom.weather ?? 'sunny',
     marketBasePrices: previewRoom.marketBasePrices ?? emptyInventory(),
+    customerRoster: previewRoom.customerRoster,
+    rngSeed: previewRoom.rng.seed,
   }
 }
 
