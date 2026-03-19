@@ -65,5 +65,6 @@ describe('default game hooks', () => {
 
     expect(result.room.phase).toBe('simulating')
     expect(result.room.simulation?.customerEvents.length).toBeGreaterThan(0)
+    expect(result.room.simulation?.customerEvents[0]?.standStops.length).toBeGreaterThan(0)
   })
 })

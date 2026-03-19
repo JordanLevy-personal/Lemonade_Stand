@@ -65,6 +65,7 @@ describe('multiplayer engine', () => {
     expect(room.players[0].reputation).toBe(50)
     expect(room.players[0].faction.id).toBe('sun-guild')
     expect(room.players[1].faction.id).toBe('market-tide')
+    expect(defaultBalanceConfig.simulationDurationMs).toBe(28_000)
   })
 
   it('creates a planning singleplayer room immediately when the target count is one', () => {
@@ -502,6 +503,133 @@ describe('multiplayer engine', () => {
           score.offerResult === 'selected_but_sold_out',
       ),
     ).toBe(true)
+    expect(
+      soldOut.room.simulation?.events.find((event) => event.outcome === 'soldOut')?.standStops.every(
+        (stop) => stop.departAt === stop.arriveAt,
+      ),
+    ).toBe(true)
+  })
+
+  it('creates sequential stand stops for multiplayer customers moving left to right', () => {
+    let room = createPlanningRoom(41)
+    room = {
+      ...room,
+      weather: 'sunny',
+      marketBasePrices: {
+        lemons: 0.3,
+        sugar: 0.2,
+        ice: 0.1,
+      },
+      customerRoster: [
+        {
+          id: 'customer-right',
+          tasteOffsets: { lemons: 0, sugar: 0, ice: 0 },
+          standHistory: {},
+        },
+      ],
+    }
+    room = updatePlayerPlan(room, 'player-host', {
+      purchases: { lemons: 6, sugar: 6, ice: 6 },
+      recipe: { lemons: 2, sugar: 2, ice: 2 },
+      price: 2.3,
+    })
+    room = updatePlayerPlan(room, 'player-guest', {
+      purchases: { lemons: 6, sugar: 6, ice: 6 },
+      recipe: { lemons: 2, sugar: 2, ice: 2 },
+      price: 1.5,
+    })
+    room = setPlayerReady(setPlayerReady(room, 'player-host', true), 'player-guest', true)
+
+    const simulated = startSimulation(room, {}, {
+      ...defaultBalanceConfig,
+      weatherProfiles: {
+        ...defaultBalanceConfig.weatherProfiles,
+        sunny: {
+          ...defaultBalanceConfig.weatherProfiles.sunny,
+          customerCount: 1,
+          baseWillingnessToPay: 2,
+          willingnessVariance: 0,
+        },
+      },
+    })
+
+    const event = simulated.simulation?.events[0]
+
+    expect(event).toBeDefined()
+    expect(event?.targetPlayerId).toBe('player-guest')
+    expect(event?.standStops.map((stop) => stop.playerId)).toEqual(['player-host', 'player-guest'])
+    expect(event?.standStops[0]).toEqual({
+      playerId: 'player-host',
+      arriveAt: 1_200,
+      departAt: 2_200,
+    })
+    expect(event?.standStops[1]).toEqual({
+      playerId: 'player-guest',
+      arriveAt: 2_900,
+      departAt: 3_900,
+    })
+    expect(event?.outcomeAt).toBe(3_900)
+    expect(event?.exitAt).toBe(4_800)
+    expect(simulated.simulation?.durationMs).toBeGreaterThanOrEqual(4_800)
+  })
+
+  it('records day history entries and preserves them into the next planning day', () => {
+    let room = createPlanningRoom(91)
+    room = {
+      ...room,
+      weather: 'sunny',
+      marketBasePrices: {
+        lemons: 0.5,
+        sugar: 0.25,
+        ice: 0.1,
+      },
+    }
+    room = updatePlayerPlan(room, 'player-host', {
+      purchases: {
+        lemons: 6,
+        sugar: 6,
+        ice: 6,
+      },
+      price: 1.1,
+    })
+    room = updatePlayerPlan(room, 'player-guest', {
+      purchases: {
+        lemons: 3,
+        sugar: 3,
+        ice: 3,
+      },
+      price: 3,
+    })
+    room = setPlayerReady(setPlayerReady(room, 'player-host', true), 'player-guest', true)
+
+    const simulated = startSimulation(room, {}, {
+      ...defaultBalanceConfig,
+      weatherProfiles: {
+        ...defaultBalanceConfig.weatherProfiles,
+        sunny: {
+          ...defaultBalanceConfig.weatherProfiles.sunny,
+          customerCount: 1,
+          baseWillingnessToPay: 2,
+          willingnessVariance: 0,
+        },
+      },
+    })
+    const hostResults = simulated.players.find((player) => player.id === 'player-host')
+    const nextDay = beginNextDay(enterResultsPhase(simulated))
+    const nextDayHost = nextDay.players.find((player) => player.id === 'player-host')
+
+    expect(hostResults?.history).toEqual([
+      expect.objectContaining({
+        day: 1,
+        revenue: 1.1,
+        purchaseCost: 5.1,
+        profit: -4,
+        reputationAfter: hostResults?.reputation,
+        cupsSold: 1,
+      }),
+    ])
+    expect(nextDayHost?.history).toEqual(hostResults?.history)
+    expect(nextDayHost?.dailyResults.cupsSold).toBe(0)
   })
 
   it('carries money, inventory, and reputation into the next planning day', () => {

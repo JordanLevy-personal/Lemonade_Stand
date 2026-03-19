@@ -400,6 +400,11 @@
   right: 3%;
 }
 
+.stand-column-solo {
+  left: 50%;
+  transform: translateX(-50%);
+}
+
 .stand-name {
   margin: 0;
   font-size: 1.25rem;
@@ -432,6 +437,24 @@
   filter: drop-shadow(0 8px 14px rgba(17, 54, 59, 0.18));
 }
 
+.reaction-badge {
+  border-radius: 999px;
+  padding: 0.25rem 0.6rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  background: rgba(255, 255, 255, 0.88);
+  box-shadow: 0 8px 18px rgba(17, 54, 59, 0.15);
+  margin-bottom: -0.1rem;
+}
+
+.reaction-badge-positive {
+  color: #198754;
+}
+
+.reaction-badge-negative {
+  color: #b6452f;
+}
+
 .sale-tag {
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.82);
@@ -442,6 +465,42 @@
 
 .crowd-soldOut .sale-tag {
   color: #b4582f;
+}
+
+.results-chart-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.results-filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.filter-chip {
+  border: 1px solid rgba(29, 74, 79, 0.14);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.82);
+  color: #1d4a4f;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  padding: 0.45rem 0.8rem;
+}
+
+.filter-chip-active {
+  border-color: transparent;
+  background: linear-gradient(135deg, #2a8da8, #f3b63f);
+  color: #fffaf0;
+}
+
+.results-chart-shell {
+  width: 100%;
+  height: 18rem;
 }
 
 .error-text {
@@ -479,5 +538,9 @@
 
   .stand-sprite {
     width: 8rem;
+  }
+
+  .results-chart-header {
+    flex-direction: column;
   }
 }

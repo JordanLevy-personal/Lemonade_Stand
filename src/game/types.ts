@@ -37,6 +37,16 @@ export interface PlayerDailyResults {
   customersSoldOut: number
 }
 
+export interface PlayerDayHistoryEntry {
+  day: number
+  revenue: number
+  purchaseCost: number
+  profit: number
+  reputationAfter: number
+  cupsSold: number
+  satisfaction: number
+}
+
 export interface FactionDefinition {
   id: string
   name: string
@@ -56,6 +66,13 @@ export interface PlayerState {
   connectionStatus: ConnectionStatus
   dailyPlan: DailyPlan
   dailyResults: PlayerDailyResults
+  history: PlayerDayHistoryEntry[]
+}
+
+export interface CustomerStop {
+  playerId: string
+  arriveAt: number
+  departAt: number
 }
 
 export interface CustomerEvent {
@@ -63,7 +80,9 @@ export interface CustomerEvent {
   customerId: string
   customerIndex: number
   spawnAt: number
-  resolveAt: number
+  outcomeAt: number
+  exitAt: number
+  standStops: CustomerStop[]
   targetPlayerId: string | null
   outcome: CustomerOutcome
   salePrice: number

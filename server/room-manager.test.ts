@@ -82,12 +82,26 @@ function createHooks(): RoomGameHooks {
             customerEvents: [
               {
                 id: 'event-1',
-                arrivalOffsetMs: 0,
+                customerId: 'customer-1',
+                customerIndex: 0,
+                spawnAt: 0,
+                outcomeAt: 1_500,
+                exitAt: 2_000,
+                standStops: [
+                  {
+                    playerId: room.players[0]?.id ?? 'host-1',
+                    arriveAt: 500,
+                    departAt: 1_500,
+                  },
+                ],
                 willingnessToPay: 2,
-                chosenPlayerId: room.players[0]?.id ?? null,
+                targetPlayerId: room.players[0]?.id ?? null,
                 outcome: 'buy',
                 salePrice: 1.5,
                 satisfaction: 0.9,
+                lane: 0,
+                xJitter: 0,
+                yJitter: 0,
               },
             ],
             simulationStartAt,
@@ -107,6 +121,20 @@ function createHooks(): RoomGameHooks {
                     customersSoldOut: 0,
                   }
                 : null,
+            history:
+              index === 0
+                ? [
+                    {
+                      day: room.day,
+                      revenue: 1.5,
+                      purchaseCost: 0.9,
+                      profit: 0.6,
+                      reputationAfter: player.reputation + 2,
+                      cupsSold: 1,
+                      satisfaction: 0.9,
+                    },
+                  ]
+                : [],
           })),
         },
         telemetry: {
