@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import App, { ROOM_SESSION_KEY } from './App'
 import type { RoomConnection, RoomConnectionHandlers } from './client/socket'
-import type { FactionDefinition, RoomState } from './client/protocol'
+import type { FactionDefinition, Recipe, RoomState } from './client/protocol'
 
 const sendMock = vi.fn()
 const closeMock = vi.fn()
@@ -35,6 +35,11 @@ const MARKET_FACTION: FactionDefinition = {
   accentColor: '#4b8e8d',
 }
 
+type HistoryEntry = RoomState['players'][number]['history'][number] & {
+  endingMoney: number
+  recipeSnapshot: Recipe
+}
+
 function createRoom(overrides: Partial<RoomState> = {}): RoomState {
   return {
     roomId: 'ROOM-42',
@@ -42,6 +47,9 @@ function createRoom(overrides: Partial<RoomState> = {}): RoomState {
     gameMode: 'multiplayer',
     targetPlayerCount: 2,
     day: 2,
+    runLengthDays: 14,
+    isGameComplete: false,
+    finalOutcome: null,
     weather: 'hot',
     phase: 'planning',
     marketBasePrices: {
@@ -112,6 +120,25 @@ function createRoom(overrides: Partial<RoomState> = {}): RoomState {
         history: [],
       },
     ],
+    ...overrides,
+  } as RoomState
+}
+
+function createHistoryEntry(overrides: Partial<HistoryEntry> = {}): HistoryEntry {
+  return {
+    day: 1,
+    revenue: 18,
+    purchaseCost: 6,
+    profit: 12,
+    endingMoney: 24,
+    reputationAfter: 54,
+    cupsSold: 12,
+    satisfaction: 0.79,
+    recipeSnapshot: {
+      lemons: 2,
+      sugar: 2,
+      ice: 3,
+    },
     ...overrides,
   }
 }
@@ -235,8 +262,28 @@ describe('App', () => {
         name: 'Alex',
         gameMode: 'multiplayer',
         targetPlayerCount: 2,
+        runLengthDays: 14,
         faction: SUN_FACTION,
         analyticsPlayerId: expect.any(String),
+      }),
+    )
+  })
+
+  it('sends the selected 30-day run length when hosting a room', () => {
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.change(screen.getByLabelText(/run length/i), {
+      target: { value: '30' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    expect(sendMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'create_room',
+        runLengthDays: 30,
       }),
     )
   })
@@ -256,6 +303,7 @@ describe('App', () => {
         name: 'Alex',
         gameMode: 'singleplayer',
         targetPlayerCount: 1,
+        runLengthDays: 14,
         faction: SUN_FACTION,
         analyticsPlayerId: expect.any(String),
       }),
@@ -690,6 +738,7 @@ describe('App', () => {
     expect(screen.getByText(/shared timeline live/i)).toBeInTheDocument()
     expect(screen.getAllByText(/alex/i).length).toBeGreaterThan(0)
     expect(screen.getAllByText(/blair/i).length).toBeGreaterThan(0)
+    expect(screen.getByLabelText(/time: 11:20 am/i)).toBeInTheDocument()
   })
 
   it('shows only one stand during a singleplayer simulation', () => {
@@ -727,6 +776,47 @@ describe('App', () => {
 
     expect(screen.getByAltText(/alex stand/i)).toBeInTheDocument()
     expect(screen.queryByText(/blair/i)).not.toBeInTheDocument()
+    expect(screen.getByLabelText(/time: 11:20 am/i)).toBeInTheDocument()
+  })
+
+  it('renders the simulation business clock from 8:00 AM through 6:00 PM', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-03-16T12:00:00.000Z'))
+
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'simulation_started',
+      simulationStartAt: Date.parse('2026-03-16T12:00:00.000Z'),
+      room: createHostRoom({}, {
+        phase: 'simulating',
+        simulation: {
+          durationMs: 6000,
+          simulationStartAt: Date.parse('2026-03-16T12:00:00.000Z'),
+          customerEvents: [],
+        },
+      }),
+    })
+
+    expect(screen.getByLabelText(/time: 8:00 am/i)).toBeInTheDocument()
+    expect(screen.queryByLabelText(/timeline:/i)).not.toBeInTheDocument()
+
+    act(() => {
+      vi.advanceTimersByTime(6000)
+    })
+
+    expect(screen.getByLabelText(/time: 6:00 pm/i)).toBeInTheDocument()
   })
 
   it('depletes the current player inventory as simulation sales resolve', () => {
@@ -860,6 +950,45 @@ describe('App', () => {
     expect(screen.getByText('👍')).toBeInTheDocument()
   })
 
+  it('hides the sale amount until the purchase outcome resolves', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-03-16T12:00:00.000Z'))
+
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'simulation_started',
+      simulationStartAt: Date.parse('2026-03-16T12:00:00.000Z'),
+      room: createHostRoom({}, {
+        phase: 'simulating',
+        simulation: {
+          durationMs: 6000,
+          simulationStartAt: Date.parse('2026-03-16T12:00:00.000Z'),
+          customerEvents: [createSimulationEvent()],
+        },
+      }),
+    })
+
+    expect(screen.queryByText('+$1.50')).not.toBeInTheDocument()
+
+    act(() => {
+      vi.advanceTimersByTime(1_600)
+    })
+
+    expect(screen.getByText('+$1.50')).toBeInTheDocument()
+  })
+
   it('shows a developer-only simulation speed slider and updates playback speed', () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-03-16T12:00:00.000Z'))
@@ -897,13 +1026,308 @@ describe('App', () => {
       vi.advanceTimersByTime(500)
     })
 
-    expect(screen.getByLabelText(/timeline: 8%/i)).toBeInTheDocument()
+    expect(screen.getByLabelText(/time: 8:50 am/i)).toBeInTheDocument()
 
     fireEvent.change(speedSlider, {
       target: { value: '2' },
     })
 
-    expect(screen.getByLabelText(/timeline: 17%/i)).toBeInTheDocument()
+    expect(screen.getByLabelText(/time: 9:40 am/i)).toBeInTheDocument()
+  })
+
+  it('lets developer mode override the simulation weather visuals locally', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-03-16T12:00:00.000Z'))
+
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'simulation_started',
+      simulationStartAt: Date.parse('2026-03-16T12:00:00.000Z'),
+      room: createHostRoom({}, {
+        phase: 'simulating',
+        weather: 'hot',
+        simulation: {
+          durationMs: 6000,
+          simulationStartAt: Date.parse('2026-03-16T12:00:00.000Z'),
+          customerEvents: [],
+        },
+      }),
+    })
+
+    const weatherOverride = screen.getByLabelText(/weather override/i)
+    expect(weatherOverride).toHaveValue('live')
+    expect(screen.getByLabelText(/weather: hot/i)).toBeInTheDocument()
+
+    fireEvent.change(weatherOverride, {
+      target: { value: 'raining' },
+    })
+
+    const scene = screen.getByRole('img', { name: /simulation scene/i })
+
+    expect(screen.getByLabelText(/weather: raining/i)).toBeInTheDocument()
+    expect(scene).toHaveAttribute('data-weather', 'raining')
+    expect(scene.querySelectorAll('.crowd-rain-drop').length).toBeGreaterThan(10)
+    expect(screen.getByText(/currently overridden to raining/i)).toBeInTheDocument()
+  })
+
+  it('exposes simulation scene state for sunny mornings', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-03-16T12:00:00.000Z'))
+
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'simulation_started',
+      simulationStartAt: Date.parse('2026-03-16T12:00:00.000Z'),
+      room: createHostRoom({}, {
+        phase: 'simulating',
+        weather: 'sunny',
+        simulation: {
+          durationMs: 6000,
+          simulationStartAt: Date.parse('2026-03-16T12:00:00.000Z'),
+          customerEvents: [],
+        },
+      }),
+    })
+
+    const scene = screen.getByRole('img', { name: /simulation scene/i })
+
+    expect(scene).toHaveAttribute('data-weather', 'sunny')
+    expect(scene).toHaveAttribute('data-time-of-day', 'morning')
+    expect(scene).toHaveAccessibleName(/sunny/i)
+    expect(scene).toHaveAccessibleName(/8:00 am/i)
+    expect(scene.querySelectorAll('.crowd-rain-drop')).toHaveLength(0)
+  })
+
+  it('exposes simulation scene state for rainy dusk', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-03-16T12:00:00.000Z'))
+
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'simulation_started',
+      simulationStartAt: Date.parse('2026-03-16T12:00:00.000Z'),
+      room: createHostRoom({}, {
+        phase: 'simulating',
+        weather: 'raining',
+        simulation: {
+          durationMs: 6000,
+          simulationStartAt: Date.parse('2026-03-16T12:00:00.000Z'),
+          customerEvents: [],
+        },
+      }),
+    })
+
+    act(() => {
+      vi.advanceTimersByTime(6000)
+    })
+
+    const scene = screen.getByRole('img', { name: /simulation scene/i })
+
+    expect(scene).toHaveAttribute('data-weather', 'raining')
+    expect(scene).toHaveAttribute('data-time-of-day', 'dusk')
+    expect(scene).toHaveAccessibleName(/raining/i)
+    expect(scene).toHaveAccessibleName(/6:00 pm/i)
+    expect(scene.querySelectorAll('.crowd-rain-drop').length).toBeGreaterThan(10)
+  })
+
+  it('adds extra cloud cover for cloudy simulations', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-03-16T12:00:00.000Z'))
+
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'simulation_started',
+      simulationStartAt: Date.parse('2026-03-16T12:00:00.000Z'),
+      room: createHostRoom({}, {
+        phase: 'simulating',
+        weather: 'cloudy',
+        simulation: {
+          durationMs: 6000,
+          simulationStartAt: Date.parse('2026-03-16T12:00:00.000Z'),
+          customerEvents: [],
+        },
+      }),
+    })
+
+    const scene = screen.getByRole('img', { name: /simulation scene/i })
+    const clouds = [...scene.querySelectorAll('.crowd-cloud')] as HTMLElement[]
+
+    expect(scene).toHaveAttribute('data-weather', 'cloudy')
+    expect(clouds.length).toBeGreaterThanOrEqual(6)
+    for (const cloud of clouds) {
+      expect(Number.parseFloat(cloud.style.getPropertyValue('--cloud-top'))).toBeLessThan(22)
+    }
+  })
+
+  it('keeps rendering customers late in the timeline when events spawn near the end', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-03-16T12:00:00.000Z'))
+
+    const { container } = render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'simulation_started',
+      simulationStartAt: Date.parse('2026-03-16T12:00:00.000Z'),
+      room: createHostRoom({}, {
+        phase: 'simulating',
+        simulation: {
+          durationMs: 6000,
+          simulationStartAt: Date.parse('2026-03-16T12:00:00.000Z'),
+          customerEvents: [
+            createSimulationEvent({
+              spawnAt: 4_700,
+              outcomeAt: 5_300,
+              exitAt: 5_800,
+              standStops: [
+                {
+                  playerId: 'player-host',
+                  arriveAt: 5_100,
+                  departAt: 5_300,
+                },
+              ],
+            }),
+          ],
+        },
+      }),
+    })
+
+    expect(container.querySelectorAll('.crowd-customer')).toHaveLength(0)
+
+    act(() => {
+      vi.advanceTimersByTime(5_400)
+    })
+
+    expect(screen.getByLabelText(/time: 5:00 pm/i)).toBeInTheDocument()
+    expect(container.querySelectorAll('.crowd-customer')).toHaveLength(1)
+  })
+
+  it('uses different sprite variants for consecutive customers so they are easier to distinguish', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-03-16T12:00:00.000Z'))
+
+    const { container } = render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'simulation_started',
+      simulationStartAt: Date.parse('2026-03-16T12:00:00.000Z'),
+      room: createHostRoom({}, {
+        phase: 'simulating',
+        simulation: {
+          durationMs: 6000,
+          simulationStartAt: Date.parse('2026-03-16T12:00:00.000Z'),
+          customerEvents: [
+            createSimulationEvent({
+              id: 'customer-0',
+              customerId: 'customer-0',
+              customerIndex: 0,
+              spawnAt: 0,
+              outcomeAt: 2_200,
+              exitAt: 3_200,
+              standStops: [
+                {
+                  playerId: 'player-host',
+                  arriveAt: 1_000,
+                  departAt: 2_200,
+                },
+              ],
+            }),
+            createSimulationEvent({
+              id: 'customer-1',
+              customerId: 'customer-1',
+              customerIndex: 1,
+              spawnAt: 0,
+              outcomeAt: 2_200,
+              exitAt: 3_200,
+              standStops: [
+                {
+                  playerId: 'player-guest',
+                  arriveAt: 1_000,
+                  departAt: 2_200,
+                },
+              ],
+            }),
+          ],
+        },
+      }),
+    })
+
+    act(() => {
+      vi.advanceTimersByTime(1_200)
+    })
+
+    const sprites = [...container.querySelectorAll('.customer-sprite')] as HTMLImageElement[]
+    expect(sprites).toHaveLength(2)
+    expect(sprites[0]?.getAttribute('src')).not.toBe(sprites[1]?.getAttribute('src'))
   })
 
   it('spreads customers across the stand width instead of stacking them at one stop point', () => {
@@ -1163,26 +1587,30 @@ describe('App', () => {
           history:
             player.id === 'player-host'
               ? [
-                  {
-                    day: 1,
-                    revenue: 18,
-                    purchaseCost: 6,
-                    profit: 12,
-                    reputationAfter: 54,
-                    cupsSold: 12,
-                    satisfaction: 0.79,
-                  },
+                  createHistoryEntry({
+                    endingMoney: 28,
+                    recipeSnapshot: {
+                      lemons: 2,
+                      sugar: 2,
+                      ice: 3,
+                    },
+                  }),
                 ]
               : [
-                  {
-                    day: 1,
+                  createHistoryEntry({
                     revenue: 13.5,
                     purchaseCost: 5.5,
                     profit: 8,
+                    endingMoney: 24.5,
                     reputationAfter: 51,
                     cupsSold: 9,
                     satisfaction: 0.68,
-                  },
+                    recipeSnapshot: {
+                      lemons: 2,
+                      sugar: 2,
+                      ice: 2,
+                    },
+                  }),
                 ],
         })),
       }),
@@ -1225,15 +1653,14 @@ describe('App', () => {
             customersSoldOut: 1,
           },
           history: [
-            {
-              day: 1,
-              revenue: 18,
-              purchaseCost: 6,
-              profit: 12,
-              reputationAfter: 54,
-              cupsSold: 12,
-              satisfaction: 0.79,
-            },
+            createHistoryEntry({
+              endingMoney: 28,
+              recipeSnapshot: {
+                lemons: 2,
+                sugar: 2,
+                ice: 3,
+              },
+            }),
           ],
         },
         { phase: 'results' },
@@ -1243,6 +1670,71 @@ describe('App', () => {
     expect(screen.getByRole('button', { name: /^next day$/i })).toBeInTheDocument()
     expect(screen.getByText(/start the next day when you are ready/i)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /request next day/i })).not.toBeInTheDocument()
+  })
+
+  it('shows a final multiplayer ending without a next-day button', () => {
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'room_state',
+      room: createRoom({
+        phase: 'results',
+        day: 14,
+        runLengthDays: 14,
+        isGameComplete: true,
+        finalOutcome: {
+          winnerPlayerIds: ['player-guest'],
+          decidedBy: 'reputation',
+        },
+        players: createRoom().players.map((player) =>
+          player.id === 'player-host'
+            ? {
+                ...player,
+                money: 32,
+                reputation: 56,
+                dailyResults: {
+                  cupsSold: 12,
+                  revenue: 18,
+                  satisfaction: 0.79,
+                  reputationDelta: 4,
+                  customersWon: 12,
+                  customersSkipped: 3,
+                  customersSoldOut: 1,
+                },
+              }
+            : {
+                ...player,
+                money: 32,
+                reputation: 61,
+                dailyResults: {
+                  cupsSold: 9,
+                  revenue: 13.5,
+                  satisfaction: 0.68,
+                  reputationDelta: 1,
+                  customersWon: 9,
+                  customersSkipped: 6,
+                  customersSoldOut: 0,
+                },
+              },
+        ),
+      }),
+    })
+
+    expect(screen.getByText(/run complete/i)).toBeInTheDocument()
+    expect(screen.getByText(/blair wins.*reputation/i)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /request next day/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^next day$/i })).not.toBeInTheDocument()
   })
 
   it('switches the results chart with metric filter buttons', () => {
@@ -1275,36 +1767,216 @@ describe('App', () => {
             customersSoldOut: index,
           },
           history: [
-            {
+            createHistoryEntry({
               day: 1,
               revenue: 15 - index * 4,
               purchaseCost: 5,
               profit: 10 - index * 4,
+              endingMoney: 24 + index,
               reputationAfter: 50 + index,
               cupsSold: 8 - index,
               satisfaction: 0.7 - index * 0.1,
-            },
-            {
+              recipeSnapshot: {
+                lemons: 1 + index * 0.5,
+                sugar: 2,
+                ice: 3 - index,
+              },
+            }),
+            createHistoryEntry({
               day: 2,
               revenue: 18 - index * 4,
               purchaseCost: 6,
               profit: 12 - index * 4,
+              endingMoney: 30 + index,
               reputationAfter: 54 + index,
               cupsSold: 10 - index,
               satisfaction: 0.8 - index * 0.1,
-            },
+              recipeSnapshot: {
+                lemons: 1.5 + index * 0.5,
+                sugar: 2.5,
+                ice: 2 - index,
+              },
+            }),
           ],
         })),
       }),
     })
 
     expect(screen.getByRole('heading', { name: /revenue over time/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /revenue \+ profit/i })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /revenue \+ profit/i }))
+    expect(screen.getByRole('heading', { name: /revenue and profit over time/i })).toBeInTheDocument()
+    expect(screen.getByText(/alex revenue/i)).toBeInTheDocument()
+    expect(screen.getByText(/alex profit/i)).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /^money$/i }))
+    expect(screen.getByRole('heading', { name: /money over time/i })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /^satisfaction$/i }))
+    expect(screen.getByRole('heading', { name: /satisfaction over time/i })).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: /^profit$/i }))
     expect(screen.getByRole('heading', { name: /profit over time/i })).toBeInTheDocument()
+  })
 
-    fireEvent.click(screen.getByRole('button', { name: /^reputation$/i }))
-    expect(screen.getByRole('heading', { name: /reputation over time/i })).toBeInTheDocument()
+  it('shows a separate recipe chart and lets multiplayer players switch the visible history', () => {
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'room_state',
+      room: createRoom({
+        phase: 'results',
+        players: createRoom().players.map((player, index) => ({
+          ...player,
+          dailyResults: {
+            cupsSold: 10 - index,
+            revenue: 18 - index * 4,
+            satisfaction: 0.8 - index * 0.1,
+            reputationDelta: 4 - index,
+            customersWon: 10 - index,
+            customersSkipped: 3 + index,
+            customersSoldOut: index,
+          },
+          history: [
+            createHistoryEntry({
+              day: 1,
+              revenue: 15 - index * 4,
+              profit: 10 - index * 4,
+              endingMoney: 25 + index,
+              reputationAfter: 50 + index,
+              cupsSold: 8 - index,
+              satisfaction: 0.7 - index * 0.1,
+              recipeSnapshot: {
+                lemons: 1 + index,
+                sugar: 2,
+                ice: 3 - index,
+              },
+            }),
+            createHistoryEntry({
+              day: 2,
+              revenue: 18 - index * 4,
+              profit: 12 - index * 4,
+              endingMoney: 30 + index,
+              reputationAfter: 54 + index,
+              cupsSold: 10 - index,
+              satisfaction: 0.8 - index * 0.1,
+              recipeSnapshot: {
+                lemons: 1.5 + index,
+                sugar: 2.5,
+                ice: 2 - index,
+              },
+            }),
+          ],
+        })),
+      }),
+    })
+
+    expect(screen.getByRole('heading', { name: /recipe over time: alex/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /alex/i })).toHaveAttribute('aria-pressed', 'true')
+
+    fireEvent.click(screen.getByRole('button', { name: /blair/i }))
+
+    expect(screen.getByRole('heading', { name: /recipe over time: blair/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /blair/i })).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('shows an empty-state message when chart history is unavailable', () => {
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'room_state',
+      room: createRoom({
+        phase: 'results',
+        players: createRoom().players.map((player) => ({
+          ...player,
+          dailyResults: {
+            cupsSold: 10,
+            revenue: 18,
+            satisfaction: 0.8,
+            reputationDelta: 4,
+            customersWon: 10,
+            customersSkipped: 3,
+            customersSoldOut: 0,
+          },
+          history: [],
+        })),
+      }),
+    })
+
+    expect(screen.getByText(/play another day to start building a trend line for this stand/i)).toBeInTheDocument()
+    expect(screen.getByText(/play another day to start tracking recipe trends/i)).toBeInTheDocument()
+  })
+
+  it('shows a final singleplayer summary without a next-day button', () => {
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /play single-player/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'room_state',
+      room: createSoloRoom(
+        {
+          money: 47.25,
+          reputation: 58,
+          dailyResults: {
+            cupsSold: 12,
+            revenue: 18,
+            satisfaction: 0.79,
+            reputationDelta: 4,
+            customersWon: 12,
+            customersSkipped: 3,
+            customersSoldOut: 1,
+          },
+        },
+        {
+          phase: 'results',
+          day: 14,
+          runLengthDays: 14,
+          isGameComplete: true,
+          finalOutcome: {
+            winnerPlayerIds: ['player-host'],
+            decidedBy: 'money',
+          },
+        },
+      ),
+    })
+
+    expect(screen.getByText(/run complete/i)).toBeInTheDocument()
+    expect(screen.getAllByText(/final cash/i).length).toBeGreaterThan(0)
+    expect(screen.getByLabelText('Final Cash: $47.25')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^next day$/i })).not.toBeInTheDocument()
   })
 
   it('offers reconnect using the stored room session', () => {

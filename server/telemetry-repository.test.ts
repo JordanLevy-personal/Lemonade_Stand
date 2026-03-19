@@ -59,6 +59,7 @@ describe('SqliteTelemetryRepository', () => {
       rngSeed: 1234,
       gameMode: 'singleplayer',
       playerCount: 1,
+      runLengthDays: 14,
       customerTastePreferenceWeight: 0.2,
     })
     repository.upsertPlayerDayPlan({
@@ -156,7 +157,7 @@ describe('SqliteTelemetryRepository', () => {
     )
     const gameRows = readTable(
       databasePath,
-      'select game_id, room_id, rng_seed, game_mode, player_count, customer_taste_preference_weight from games',
+      'select game_id, room_id, rng_seed, game_mode, player_count, run_length_days, customer_taste_preference_weight from games',
     )
 
     expect(gameRows).toEqual([
@@ -166,6 +167,7 @@ describe('SqliteTelemetryRepository', () => {
         rng_seed: 1234,
         game_mode: 'singleplayer',
         player_count: 1,
+        run_length_days: 14,
         customer_taste_preference_weight: 0.2,
       },
     ])
@@ -194,6 +196,7 @@ describe('SqliteTelemetryRepository', () => {
       rngSeed: 999,
       gameMode: 'multiplayer',
       playerCount: 2,
+      runLengthDays: 30,
       customerTastePreferenceWeight: 0.2,
     })
     repository.insertCustomerProfiles({

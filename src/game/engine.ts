@@ -26,11 +26,12 @@ const MIN_PRIMARY_RECIPE_INGREDIENT = 0.1
 const RECIPE_PRECISION = 1
 const INVENTORY_EPSILON = 1e-9
 const SATISFACTION_CURVE_EXPONENT = 2
-const CUSTOMER_ENTRY_TRAVEL_MS = 900
+const CUSTOMER_ENTRY_TRAVEL_MS = 1_080
 const CUSTOMER_STAND_DWELL_MS = 1_000
-const CUSTOMER_BETWEEN_STANDS_MS = 700
-const CUSTOMER_EXIT_TRAVEL_MS = 900
+const CUSTOMER_BETWEEN_STANDS_MS = 840
+const CUSTOMER_EXIT_TRAVEL_MS = 1_080
 const CUSTOMER_SPAWN_BUFFER_MS = 300
+const CUSTOMER_END_BUFFER_MS = 300
 
 function roundMoney(value: number): number {
   return Math.round(value * 100) / 100
@@ -797,6 +798,7 @@ function finalizePlayers(room: RoomState, satisfactionTotals: Map<string, number
     const reputationAfter = clamp(player.reputation + reputationDelta, balance.reputationMin, balance.reputationMax)
     const purchaseCost = calculatePurchaseCost(room.marketBasePrices ?? emptyInventory(), player.dailyPlan.purchases)
     const profit = roundMoney(player.dailyResults.revenue - purchaseCost)
+    const endingMoney = roundMoney(player.money)
 
     return {
       ...player,
@@ -814,18 +816,48 @@ function finalizePlayers(room: RoomState, satisfactionTotals: Map<string, number
           revenue: player.dailyResults.revenue,
           purchaseCost,
           profit,
+          endingMoney,
           reputationAfter,
           cupsSold: player.dailyResults.cupsSold,
           satisfaction,
+          recipeSnapshot: sanitizeRecipe(player.dailyPlan.recipe),
         },
       ],
     }
   })
 }
 
-function eventTimings(
-  spawnAt: number,
+function customerActivityDurationMs(stopCount: number, stopDurationMs: number): number {
+  if (stopCount <= 0) {
+    return CUSTOMER_ENTRY_TRAVEL_MS + CUSTOMER_STAND_DWELL_MS + CUSTOMER_EXIT_TRAVEL_MS
+  }
+
+  return CUSTOMER_ENTRY_TRAVEL_MS
+    + stopCount * stopDurationMs
+    + Math.max(stopCount - 1, 0) * CUSTOMER_BETWEEN_STANDS_MS
+    + CUSTOMER_EXIT_TRAVEL_MS
+}
+
+function spawnAtForCustomer(
   customerIndex: number,
+  totalCustomers: number,
+  durationMs: number,
+  activityDurationMs: number,
+): number {
+  const normalized = totalCustomers <= 1 ? 0 : customerIndex / (totalCustomers - 1)
+  const latestSpawnAt = Math.max(
+    CUSTOMER_SPAWN_BUFFER_MS,
+    durationMs - CUSTOMER_END_BUFFER_MS - activityDurationMs,
+  )
+
+  return Math.round(
+    CUSTOMER_SPAWN_BUFFER_MS + normalized * (latestSpawnAt - CUSTOMER_SPAWN_BUFFER_MS),
+  )
+}
+
+function eventTimings(
+  customerIndex: number,
+  spawnAt: number,
   standStops: CustomerStop[],
 ): { spawnAt: number; outcomeAt: number; exitAt: number; lane: number; xJitter: number; yJitter: number } {
   const lane = customerIndex % 3
@@ -841,9 +873,15 @@ function eventTimings(
   }
 }
 
-function eventSpawnAt(customerIndex: number, totalCustomers: number, durationMs: number): number {
-  const normalized = totalCustomers <= 1 ? 0 : customerIndex / (totalCustomers - 1)
-  return Math.round(CUSTOMER_SPAWN_BUFFER_MS + normalized * durationMs * 0.45)
+function customerActivityDurationForStops(stops: Array<{ stopDurationMs: number }>): number {
+  if (stops.length === 0) {
+    return CUSTOMER_ENTRY_TRAVEL_MS + CUSTOMER_STAND_DWELL_MS + CUSTOMER_EXIT_TRAVEL_MS
+  }
+
+  return CUSTOMER_ENTRY_TRAVEL_MS
+    + stops.reduce((total, stop) => total + stop.stopDurationMs, 0)
+    + Math.max(stops.length - 1, 0) * CUSTOMER_BETWEEN_STANDS_MS
+    + CUSTOMER_EXIT_TRAVEL_MS
 }
 
 function leftToRightPlayerIds(room: RoomState): string[] {
@@ -949,6 +987,53 @@ function applyCustomerResolution(
   }
 }
 
+function buildTimedStandStops(
+  customerIndex: number,
+  totalCustomers: number,
+  visitedPlayerIds: string[],
+  stopDurationMs: number,
+  durationMs: number,
+): {
+  standStops: CustomerStop[]
+  timing: ReturnType<typeof eventTimings>
+} {
+  const spawnAt = spawnAtForCustomer(
+    customerIndex,
+    totalCustomers,
+    durationMs,
+    customerActivityDurationMs(visitedPlayerIds.length, stopDurationMs),
+  )
+  const standStops = buildStandStops(visitedPlayerIds, spawnAt, stopDurationMs)
+
+  return {
+    standStops,
+    timing: eventTimings(customerIndex, spawnAt, standStops),
+  }
+}
+
+function buildTimedStandStopsFromTimeline(
+  customerIndex: number,
+  totalCustomers: number,
+  stops: Array<{ playerId: string; stopDurationMs: number }>,
+  durationMs: number,
+): {
+  standStops: CustomerStop[]
+  timing: ReturnType<typeof eventTimings>
+} {
+  const spawnAt = spawnAtForCustomer(
+    customerIndex,
+    totalCustomers,
+    durationMs,
+    customerActivityDurationForStops(stops),
+  )
+  const standStops = buildStandStopsFromTimeline(stops, spawnAt)
+
+  return {
+    standStops,
+    timing: eventTimings(customerIndex, spawnAt, standStops),
+  }
+}
+
 export function startSimulationWithTelemetry(
   room: RoomState,
   options: {
@@ -995,7 +1080,6 @@ export function startSimulationWithTelemetry(
     const [willingnessToPay, budgetRoom] = generateCustomerBudget(nextRoom, room.weather, balance)
     nextRoom = budgetRoom
     const preferredRecipe = preferredRecipeForCustomer(customer, room.weather, balance)
-    const spawnAt = eventSpawnAt(customerIndex, totalCustomers, requestedDurationMs)
     const soldOutPlayerIds: string[] = []
     const excludedPlayerIds = new Set<string>()
     let selectionRound = 1
@@ -1064,33 +1148,39 @@ export function startSimulationWithTelemetry(
       nextRoom = updateCustomerHistory(nextRoom, customer.id, winnerId, room.day, finalSatisfaction)
     }
 
-    const standStops =
+    const { standStops, timing } =
       winnerId !== null && soldOutPlayerIds.length === 0
-        ? buildStandStops(
+        ? buildTimedStandStops(
+            customerIndex,
+            totalCustomers,
             visitedPlayerIdsForEvent(nextRoom, winnerId, 'buy'),
-            spawnAt,
             CUSTOMER_STAND_DWELL_MS,
+            requestedDurationMs,
           )
         : winnerId !== null
-          ? buildStandStopsFromTimeline(
+          ? buildTimedStandStopsFromTimeline(
+              customerIndex,
+              totalCustomers,
               [
                 ...soldOutPlayerIds.map((playerId) => ({ playerId, stopDurationMs: 0 })),
                 { playerId: winnerId, stopDurationMs: CUSTOMER_STAND_DWELL_MS },
               ],
-              spawnAt,
+              requestedDurationMs,
             )
           : soldOutPlayerIds.length > 0
-            ? buildStandStopsFromTimeline(
+            ? buildTimedStandStopsFromTimeline(
+                customerIndex,
+                totalCustomers,
                 soldOutPlayerIds.map((playerId) => ({ playerId, stopDurationMs: 0 })),
-                spawnAt,
+                requestedDurationMs,
               )
-            : buildStandStops(
+            : buildTimedStandStops(
+                customerIndex,
+                totalCustomers,
                 visitedPlayerIdsForEvent(nextRoom, null, 'skip'),
-                spawnAt,
                 CUSTOMER_STAND_DWELL_MS,
+                requestedDurationMs,
               )
-
-    const timing = eventTimings(spawnAt, customerIndex, standStops)
     computedDurationMs = Math.max(computedDurationMs, timing.exitAt)
 
     events.push({
