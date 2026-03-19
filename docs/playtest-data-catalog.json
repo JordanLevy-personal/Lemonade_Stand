@@ -58,6 +58,13 @@
           "rationale": "Lets analysts segment runs by configured seat count as the game expands beyond the current 1-2 player UI."
         },
         {
+          "name": "runLengthDays",
+          "type": "enum",
+          "source": "room configuration at create_room",
+          "implemented": true,
+          "rationale": "Captures whether a run was configured for the shorter or longer ending so pacing and final-economy outcomes can be compared cleanly."
+        },
+        {
           "name": "createdAt",
           "type": "iso-datetime",
           "source": "telemetry repository",

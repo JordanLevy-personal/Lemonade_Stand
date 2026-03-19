@@ -41,6 +41,7 @@ describe('default game hooks', () => {
       name: 'Host',
       gameMode: 'multiplayer',
       targetPlayerCount: 2,
+      runLengthDays: 14,
       faction: HOST_FACTION,
       analyticsPlayerId: 'analytics-host',
     })

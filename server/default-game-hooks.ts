@@ -126,6 +126,9 @@ function toServerRoom(gameRoom: GameRoomState): RoomState {
     gameMode: gameRoom.gameMode,
     targetPlayerCount: gameRoom.maxPlayers,
     day: gameRoom.day,
+    runLengthDays: 14,
+    isGameComplete: false,
+    finalOutcome: null,
     weather: gameRoom.weather ?? 'sunny',
     phase: gameRoom.phase,
     players: gameRoom.players.map((player) => ({
@@ -222,6 +225,9 @@ export function createDefaultRoomGameHooks(): RoomGameHooks {
       return {
         room: {
           ...nextRoom,
+          runLengthDays: room.runLengthDays,
+          isGameComplete: false,
+          finalOutcome: null,
           phase: 'simulating',
           simulation:
             nextRoom.simulation === null
@@ -244,6 +250,9 @@ export function createDefaultRoomGameHooks(): RoomGameHooks {
 
       return {
         ...toServerRoom(nextDay),
+        runLengthDays: room.runLengthDays,
+        isGameComplete: false,
+        finalOutcome: null,
         phase: 'planning',
         pausedFromPhase: null,
         requestedNextDayPlayerIds: [],

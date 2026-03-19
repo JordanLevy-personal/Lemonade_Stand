@@ -2,6 +2,7 @@ import type { CustomerProfile } from '../src/game/types'
 
 export type RoomPhase = 'lobby' | 'planning' | 'simulating' | 'results' | 'paused'
 export type GameMode = 'singleplayer' | 'multiplayer'
+export type RunLengthDays = 14 | 30
 
 export type ConnectionStatus = 'connected' | 'disconnected'
 
@@ -65,6 +66,11 @@ export interface RoomSimulation {
   durationMs: number
 }
 
+export interface RoomFinalOutcome {
+  winnerPlayerIds: string[]
+  decidedBy: 'money' | 'reputation' | 'draw'
+}
+
 export interface PlayerState {
   id: string
   name: string
@@ -84,6 +90,9 @@ export interface RoomState {
   gameMode: GameMode
   targetPlayerCount: number
   day: number
+  runLengthDays: RunLengthDays
+  isGameComplete: boolean
+  finalOutcome: RoomFinalOutcome | null
   weather: Weather
   phase: RoomPhase
   players: PlayerState[]
@@ -100,6 +109,7 @@ export interface CreateRoomMessage {
   name: string
   gameMode: GameMode
   targetPlayerCount: number
+  runLengthDays: RunLengthDays
   faction: FactionSelection
   analyticsPlayerId: string
 }
