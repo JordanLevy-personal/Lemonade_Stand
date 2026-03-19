@@ -50,21 +50,11 @@ function emptyInventory(): Inventory {
 
 function createHooks(): RoomGameHooks {
   return {
-    createInitialState(seed: number) {
-      return {
-        customerRoster: [
-          {
-            id: `customer-${seed}`,
-            tasteOffsets: { lemons: 0, sugar: 0, ice: 0 },
-            standHistory: {},
-          },
-        ],
-        rngSeed: seed + 100,
-      }
-    },
     createDay(day: number): {
       weather: Weather
       marketBasePrices: MarketBasePrices
+      customerRoster: NonNullable<RoomState['customerRoster']>
+      rngSeed: number
     } {
       return {
         weather: day % 2 === 0 ? 'hot' : 'sunny',
@@ -73,6 +63,14 @@ function createHooks(): RoomGameHooks {
           sugar: 0.2,
           ice: 0.1,
         },
+        customerRoster: [
+          {
+            id: `customer-${day}`,
+            tasteOffsets: { lemons: 0, sugar: 0, ice: 0 },
+            standHistory: {},
+          },
+        ],
+        rngSeed: day,
       }
     },
     startSimulation(room: RoomState, simulationStartAt: number): { room: RoomState; telemetry: SimulationTelemetry } {

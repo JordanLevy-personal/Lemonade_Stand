@@ -28,6 +28,8 @@ export const ANALYTICS_PLAYER_ID_KEY = 'lemonade-stand-analytics-player-id-v1'
 const DEFAULT_HOST_FACTION = 'sun-guild'
 const DEFAULT_JOIN_FACTION = 'market-tide'
 const RECIPE_STEP = 0.1
+const ICE_RECIPE_STEP = 1
+const RECIPE_MAX = 5
 const INVENTORY_PRECISION = 1
 
 interface StoredRoomSession {
@@ -368,6 +370,47 @@ function NumberField({
   )
 }
 
+function RangeSliderField({
+  label,
+  value,
+  min,
+  max,
+  step,
+  onChange,
+}: {
+  label: string
+  value: number
+  min: number
+  max: number
+  step: number
+  onChange: (value: number) => void
+}): JSX.Element {
+  return (
+    <label className="field range-field">
+      <span className="field-heading">
+        <span className="field-label">{label}</span>
+        <span className="field-value" aria-hidden="true">
+          {value}
+        </span>
+      </span>
+      <input
+        className="field-range-input"
+        type="range"
+        aria-label={label}
+        value={value}
+        min={min}
+        max={max}
+        step={step}
+        onChange={(event) => onChange(numberValue(event.target.value))}
+      />
+      <span className="range-scale" aria-hidden="true">
+        <span>{min}</span>
+        <span>{max}</span>
+      </span>
+    </label>
+  )
+}
+
 function LobbyScreen({
   form,
   reconnectSession,
@@ -601,10 +644,11 @@ function PlanningScreen({
           <p className="eyebrow">Recipe</p>
           <h2>Dial in the recipe</h2>
           <div className="field-grid">
-            <NumberField
+            <RangeSliderField
               label="Lemons per Cup"
               value={localPlan.recipe.lemons}
               min={RECIPE_STEP}
+              max={RECIPE_MAX}
               step={RECIPE_STEP}
               onChange={(lemons) =>
                 onPlanChange({
@@ -613,10 +657,11 @@ function PlanningScreen({
                 })
               }
             />
-            <NumberField
+            <RangeSliderField
               label="Sugar per Cup"
               value={localPlan.recipe.sugar}
               min={RECIPE_STEP}
+              max={RECIPE_MAX}
               step={RECIPE_STEP}
               onChange={(sugar) =>
                 onPlanChange({
@@ -625,11 +670,12 @@ function PlanningScreen({
                 })
               }
             />
-            <NumberField
+            <RangeSliderField
               label="Ice per Cup"
               value={localPlan.recipe.ice}
               min={0}
-              step={RECIPE_STEP}
+              max={RECIPE_MAX}
+              step={ICE_RECIPE_STEP}
               onChange={(ice) =>
                 onPlanChange({
                   ...localPlan,

@@ -303,7 +303,43 @@ describe('App', () => {
     })
   })
 
-  it('submits fractional recipe values without rounding them up to whole numbers', () => {
+  it('renders recipe controls as bounded sliders with the requested stepping', () => {
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'room_state',
+      room: createRoom(),
+    })
+
+    const lemonsSlider = screen.getByRole('slider', { name: /^Lemons per Cup$/i })
+    const sugarSlider = screen.getByRole('slider', { name: /^Sugar per Cup$/i })
+    const iceSlider = screen.getByRole('slider', { name: /^Ice per Cup$/i })
+
+    expect(lemonsSlider).toHaveAttribute('min', '0.1')
+    expect(lemonsSlider).toHaveAttribute('max', '5')
+    expect(lemonsSlider).toHaveAttribute('step', '0.1')
+
+    expect(sugarSlider).toHaveAttribute('min', '0.1')
+    expect(sugarSlider).toHaveAttribute('max', '5')
+    expect(sugarSlider).toHaveAttribute('step', '0.1')
+
+    expect(iceSlider).toHaveAttribute('min', '0')
+    expect(iceSlider).toHaveAttribute('max', '5')
+    expect(iceSlider).toHaveAttribute('step', '1')
+  })
+
+  it('submits recipe slider values without rounding lemons or sugar up to whole numbers', () => {
     render(<App />)
 
     fireEvent.change(screen.getByLabelText(/your name/i), {
@@ -329,7 +365,7 @@ describe('App', () => {
       target: { value: '0.3' },
     })
     fireEvent.change(screen.getByLabelText(/^Ice per Cup$/i), {
-      target: { value: '1.2' },
+      target: { value: '1' },
     })
     fireEvent.click(screen.getByRole('button', { name: /lock in plan/i }))
 
@@ -346,7 +382,7 @@ describe('App', () => {
         recipe: {
           lemons: 0.5,
           sugar: 0.3,
-          ice: 1.2,
+          ice: 1,
         },
         price: 1.4,
       },

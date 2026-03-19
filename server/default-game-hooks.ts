@@ -168,6 +168,8 @@ function toServerRoom(gameRoom: GameRoomState): RoomState {
 function createPreviewDay(day: number): {
   weather: Weather
   marketBasePrices: MarketBasePrices
+  customerRoster: NonNullable<RoomState['customerRoster']>
+  rngSeed: number
 } {
   const previewRoom = joinGameRoom(
     createGameRoom({
@@ -189,26 +191,13 @@ function createPreviewDay(day: number): {
   return {
     weather: previewRoom.weather ?? 'sunny',
     marketBasePrices: previewRoom.marketBasePrices ?? emptyInventory(),
+    customerRoster: previewRoom.customerRoster,
+    rngSeed: previewRoom.rng.seed,
   }
 }
 
 export function createDefaultRoomGameHooks(): RoomGameHooks {
   return {
-    createInitialState(seed) {
-      const initialRoom = createGameRoom({
-        roomId: `telemetry-${seed}`,
-        hostPlayerId: 'telemetry-host',
-        hostPlayerName: 'Telemetry Host',
-        hostSessionId: 'telemetry-host',
-        hostFactionId: 'sun-guild',
-        seed,
-      })
-
-      return {
-        customerRoster: initialRoom.customerRoster,
-        rngSeed: initialRoom.rng.seed,
-      }
-    },
     createDay(day) {
       return createPreviewDay(day)
     },

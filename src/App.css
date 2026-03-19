@@ -72,9 +72,22 @@
   gap: 0.35rem;
 }
 
+.field-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.75rem;
+}
+
 .field-label {
   font-size: 0.88rem;
   color: #1d4a4f;
+}
+
+.field-value {
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: #2a8da8;
 }
 
 .field-input {
@@ -84,6 +97,54 @@
   font: inherit;
   background: rgba(255, 255, 255, 0.86);
   color: #12363b;
+}
+
+.range-field {
+  gap: 0.55rem;
+}
+
+.field-range-input {
+  appearance: none;
+  width: 100%;
+  height: 0.55rem;
+  border: none;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(42, 141, 168, 0.95), rgba(243, 182, 63, 0.95));
+  box-shadow: inset 0 1px 3px rgba(18, 54, 59, 0.2);
+  cursor: pointer;
+}
+
+.field-range-input::-webkit-slider-thumb {
+  appearance: none;
+  width: 1.15rem;
+  height: 1.15rem;
+  border: 2px solid rgba(255, 250, 236, 0.95);
+  border-radius: 50%;
+  background: #14363b;
+  box-shadow: 0 4px 10px rgba(20, 54, 59, 0.22);
+}
+
+.field-range-input::-moz-range-thumb {
+  width: 1.15rem;
+  height: 1.15rem;
+  border: 2px solid rgba(255, 250, 236, 0.95);
+  border-radius: 50%;
+  background: #14363b;
+  box-shadow: 0 4px 10px rgba(20, 54, 59, 0.22);
+}
+
+.field-range-input::-moz-range-track {
+  height: 0.55rem;
+  border: none;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(42, 141, 168, 0.95), rgba(243, 182, 63, 0.95));
+}
+
+.range-scale {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.75rem;
+  color: rgba(29, 74, 79, 0.62);
 }
 
 .action-row {

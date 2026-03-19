@@ -7,16 +7,14 @@ import type {
   RoomState,
   Weather,
 } from './contracts'
-import type { CustomerProfile, SimulationTelemetry } from '../src/game/types'
+import type { SimulationTelemetry } from '../src/game/types'
 
 export interface RoomGameHooks {
-  createInitialState: (seed: number) => {
-    customerRoster: CustomerProfile[]
-    rngSeed: number
-  }
   createDay: (day: number) => {
     weather: Weather
     marketBasePrices: MarketBasePrices
+    customerRoster: NonNullable<RoomState['customerRoster']>
+    rngSeed: number
   }
   startSimulation: (
     room: RoomState,
@@ -125,16 +123,6 @@ function planningPhase(room: RoomState): RoomState {
   }
 }
 
-function seedFromRoomId(roomId: string): number {
-  let seed = 0
-
-  for (const character of roomId) {
-    seed = (Math.imul(seed, 31) + character.charCodeAt(0)) >>> 0
-  }
-
-  return seed || 1
-}
-
 export class RoomManager {
   private readonly rooms = new Map<string, RoomState>()
   private readonly analyticsPlayerIds = new Map<string, string>()
@@ -151,10 +139,8 @@ export class RoomManager {
   }
 
   createRoom(input: CreateRoomInput): RoomState {
-    const { weather, marketBasePrices } = this.hooks.createDay(1)
+    const { weather, marketBasePrices, customerRoster, rngSeed } = this.hooks.createDay(1)
     const defaults = this.hooks.createPlayerDefaults()
-    const initialSeed = seedFromRoomId(input.roomId)
-    const initialState = this.hooks.createInitialState(initialSeed)
     const room: RoomState = {
       roomId: input.roomId,
       hostPlayerId: input.playerId,
@@ -177,8 +163,8 @@ export class RoomManager {
       simulation: null,
       pausedFromPhase: null,
       requestedNextDayPlayerIds: [],
-      customerRoster: initialState.customerRoster,
-      rngSeed: initialState.rngSeed,
+      customerRoster,
+      rngSeed,
     }
 
     this.rooms.set(room.roomId, room)

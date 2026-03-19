@@ -36,6 +36,14 @@ Investigating a production-like multiplayer disconnect where the host appears to
 - **Decisions / Notes:** The workflow already uses `set -euo pipefail` inside the remote script, so removing `script_stop` preserves fail-fast behavior without relying on an unsupported action input.
 - **Next Step:** Push the workflow fix and trigger a fresh deploy run, then inspect the next failing step if any remain.
 
+### 2026-03-18 11:31:59 PDT - Hardened deploy health check timing
+
+- **Status:** Completed
+- **Work Completed:** Confirmed that `http://127.0.0.1:3001/health` is the correct backend-only health target for this deployment, then updated both the VPS redeploy script and the GitHub Actions workflow to retry the health check after `systemctl restart` instead of failing on a single immediate curl.
+- **Validation:** Ran `bash -n scripts/redeploy-vps.sh`, parsed `.github/workflows/deploy-vps.yml` as YAML, and ran `git diff --check`.
+- **Decisions / Notes:** The deploy was likely failing because the service was checked too quickly after restart; the new retry loop preserves the useful backend-local health check while making deploys resilient to normal startup delay.
+- **Next Step:** Re-run the VPS script or GitHub Actions deploy and confirm the service becomes healthy within the retry window.
+
 ## Validation
 
 - `rg -n "room|disconnect|heartbeat|timeout|websocket|socket|host|join" . --glob '!tasks/**' --glob '!node_modules/**'`
@@ -49,3 +57,4 @@ Investigating a production-like multiplayer disconnect where the host appears to
 - `gh run list --workflow deploy-vps.yml --limit 5`
 - `gh run view 23220407688`
 - `git diff --check`
+- `bash -n scripts/redeploy-vps.sh`
