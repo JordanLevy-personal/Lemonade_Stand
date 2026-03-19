@@ -4,6 +4,7 @@ import type {
   BalanceConfig,
   CustomerOfferResult,
   CustomerEvent,
+  CustomerStop,
   CustomerProfile,
   CustomerStandHistory,
   DailyPlan,
@@ -23,6 +24,11 @@ const MIN_PRIMARY_RECIPE_INGREDIENT = 0.1
 const RECIPE_PRECISION = 1
 const INVENTORY_EPSILON = 1e-9
 const SATISFACTION_CURVE_EXPONENT = 2
+const CUSTOMER_ENTRY_TRAVEL_MS = 900
+const CUSTOMER_STAND_DWELL_MS = 1_000
+const CUSTOMER_BETWEEN_STANDS_MS = 700
+const CUSTOMER_EXIT_TRAVEL_MS = 900
+const CUSTOMER_SPAWN_BUFFER_MS = 300
 
 function roundMoney(value: number): number {
   return Math.round(value * 100) / 100
@@ -142,6 +148,7 @@ function createPlayer(
     connectionStatus: 'connected',
     dailyPlan: createDailyPlan(balance),
     dailyResults: emptyResults(),
+    history: [],
   }
 }
 
@@ -787,16 +794,31 @@ function finalizePlayers(room: RoomState, satisfactionTotals: Map<string, number
       player.dailyResults.cupsSold === 0
         ? -1
         : Math.round((satisfaction - 0.55) * Math.max(2, Math.round(player.dailyResults.cupsSold / 4)) * 2)
+    const reputationAfter = clamp(player.reputation + reputationDelta, balance.reputationMin, balance.reputationMax)
+    const purchaseCost = calculatePurchaseCost(room.marketBasePrices ?? emptyInventory(), player.dailyPlan.purchases)
+    const profit = roundMoney(player.dailyResults.revenue - purchaseCost)
 
     return {
       ...player,
-      reputation: clamp(player.reputation + reputationDelta, balance.reputationMin, balance.reputationMax),
+      reputation: reputationAfter,
       isReady: false,
       dailyResults: {
         ...player.dailyResults,
         satisfaction,
         reputationDelta,
       },
+      history: [
+        ...player.history,
+        {
+          day: room.day,
+          revenue: player.dailyResults.revenue,
+          purchaseCost,
+          profit,
+          reputationAfter,
+          cupsSold: player.dailyResults.cupsSold,
+          satisfaction,
+        },
+      ],
     }
   })
 }
@@ -804,19 +826,60 @@ function finalizePlayers(room: RoomState, satisfactionTotals: Map<string, number
 function eventTimings(
   customerIndex: number,
   totalCustomers: number,
+  standStops: CustomerStop[],
   durationMs: number,
-): { spawnAt: number; resolveAt: number; lane: number; xJitter: number; yJitter: number } {
-  const normalized = totalCustomers <= 1 ? 0.1 : customerIndex / (totalCustomers - 1)
-  const spawnAt = Math.round(300 + normalized * durationMs * 0.65)
+): { spawnAt: number; outcomeAt: number; exitAt: number; lane: number; xJitter: number; yJitter: number } {
+  const normalized = totalCustomers <= 1 ? 0 : customerIndex / (totalCustomers - 1)
+  const spawnAt = Math.round(CUSTOMER_SPAWN_BUFFER_MS + normalized * durationMs * 0.45)
   const lane = customerIndex % 3
+  const outcomeAt = standStops.at(-1)?.departAt ?? spawnAt + CUSTOMER_ENTRY_TRAVEL_MS + CUSTOMER_STAND_DWELL_MS
 
   return {
     spawnAt,
-    resolveAt: Math.min(durationMs, spawnAt + 1_500),
+    outcomeAt,
+    exitAt: outcomeAt + CUSTOMER_EXIT_TRAVEL_MS,
     lane,
     xJitter: randomJitter(customerIndex + 1, 0.18),
     yJitter: randomJitter(customerIndex + 7, 0.12),
   }
+}
+
+function leftToRightPlayerIds(room: RoomState): string[] {
+  return room.players.map((player) => player.id)
+}
+
+function visitedPlayerIdsForEvent(room: RoomState, winnerId: string | null, outcome: CustomerEvent['outcome']): string[] {
+  const orderedPlayerIds = leftToRightPlayerIds(room)
+  if (orderedPlayerIds.length <= 1) {
+    return orderedPlayerIds
+  }
+
+  if (outcome !== 'buy' || winnerId === null) {
+    return orderedPlayerIds
+  }
+
+  const winnerIndex = orderedPlayerIds.indexOf(winnerId)
+  return winnerIndex === -1 ? orderedPlayerIds : orderedPlayerIds.slice(0, winnerIndex + 1)
+}
+
+function buildStandStops(
+  visitedPlayerIds: string[],
+  spawnAt: number,
+  stopDurationMs: number,
+): CustomerStop[] {
+  let nextArrival = spawnAt + CUSTOMER_ENTRY_TRAVEL_MS
+
+  return visitedPlayerIds.map((playerId, index) => {
+    const arriveAt = nextArrival
+    const departAt = arriveAt + stopDurationMs
+    nextArrival = departAt + (index === visitedPlayerIds.length - 1 ? 0 : CUSTOMER_BETWEEN_STANDS_MS)
+
+    return {
+      playerId,
+      arriveAt,
+      departAt,
+    }
+  })
 }
 
 export function startSimulationWithTelemetry(
@@ -840,7 +903,7 @@ export function startSimulationWithTelemetry(
     }
   }
 
-  const durationMs = options.durationMs ?? balance.simulationDurationMs
+  const requestedDurationMs = options.durationMs ?? balance.simulationDurationMs
   let nextRoom: RoomState = {
     ...room,
     players: room.players.map((player) => applyPurchases(player, room.marketBasePrices!)),
@@ -853,6 +916,7 @@ export function startSimulationWithTelemetry(
   const telemetryEvents: TelemetryCustomerEvent[] = []
   const telemetryScores: TelemetryCustomerOfferScore[] = []
   const satisfactionTotals = new Map<string, number>()
+  let computedDurationMs = requestedDurationMs
 
   nextRoom.players.forEach((player) => {
     satisfactionTotals.set(player.id, 0)
@@ -873,7 +937,6 @@ export function startSimulationWithTelemetry(
     )
     const [winnerId, winnerRoom] = chooseWinner(scores, nextRoom)
     nextRoom = winnerRoom
-    const timing = eventTimings(customerIndex, totalCustomers, durationMs)
 
     if (winnerId === null) {
       telemetryScores.push(...scores)
@@ -887,12 +950,21 @@ export function startSimulationWithTelemetry(
           },
         })),
       }
+      const standStops = buildStandStops(
+        visitedPlayerIdsForEvent(nextRoom, null, 'skip'),
+        Math.round(CUSTOMER_SPAWN_BUFFER_MS + (totalCustomers <= 1 ? 0 : customerIndex / (totalCustomers - 1)) * requestedDurationMs * 0.45),
+        CUSTOMER_STAND_DWELL_MS,
+      )
+      const timing = eventTimings(customerIndex, totalCustomers, standStops, requestedDurationMs)
+      computedDurationMs = Math.max(computedDurationMs, timing.exitAt)
       events.push({
         id: customerEventId,
         customerId: customer.id,
         customerIndex,
         spawnAt: timing.spawnAt,
-        resolveAt: timing.resolveAt,
+        outcomeAt: timing.outcomeAt,
+        exitAt: timing.exitAt,
+        standStops,
         targetPlayerId: null,
         outcome: 'skip',
         salePrice: 0,
@@ -937,16 +1009,25 @@ export function startSimulationWithTelemetry(
                   ...player.dailyResults,
                   customersSkipped: player.dailyResults.customersSkipped + 1,
                 },
-              },
+          },
         ),
       }
       nextRoom = updateCustomerHistory(nextRoom, customer.id, winnerId, room.day, null)
+      const standStops = buildStandStops(
+        visitedPlayerIdsForEvent(nextRoom, winnerId, 'soldOut'),
+        Math.round(CUSTOMER_SPAWN_BUFFER_MS + (totalCustomers <= 1 ? 0 : customerIndex / (totalCustomers - 1)) * requestedDurationMs * 0.45),
+        0,
+      )
+      const timing = eventTimings(customerIndex, totalCustomers, standStops, requestedDurationMs)
+      computedDurationMs = Math.max(computedDurationMs, timing.exitAt)
       events.push({
         id: customerEventId,
         customerId: customer.id,
         customerIndex,
         spawnAt: timing.spawnAt,
-        resolveAt: timing.resolveAt,
+        outcomeAt: timing.outcomeAt,
+        exitAt: timing.exitAt,
+        standStops,
         targetPlayerId: winnerId,
         outcome: 'soldOut',
         salePrice: 0,
@@ -1006,13 +1087,22 @@ export function startSimulationWithTelemetry(
       ),
     }
     nextRoom = updateCustomerHistory(nextRoom, customer.id, winnerId, room.day, satisfaction)
+    const standStops = buildStandStops(
+      visitedPlayerIdsForEvent(nextRoom, winnerId, 'buy'),
+      Math.round(CUSTOMER_SPAWN_BUFFER_MS + (totalCustomers <= 1 ? 0 : customerIndex / (totalCustomers - 1)) * requestedDurationMs * 0.45),
+      CUSTOMER_STAND_DWELL_MS,
+    )
+    const timing = eventTimings(customerIndex, totalCustomers, standStops, requestedDurationMs)
+    computedDurationMs = Math.max(computedDurationMs, timing.exitAt)
 
     events.push({
       id: customerEventId,
       customerId: customer.id,
       customerIndex,
       spawnAt: timing.spawnAt,
-      resolveAt: timing.resolveAt,
+      outcomeAt: timing.outcomeAt,
+      exitAt: timing.exitAt,
+      standStops,
       targetPlayerId: winnerId,
       outcome: 'buy',
       salePrice: chosenPlayer.dailyPlan.price,
@@ -1042,7 +1132,7 @@ export function startSimulationWithTelemetry(
     players: finalizePlayers(nextRoom, satisfactionTotals, balance),
     simulation: {
       events,
-      durationMs,
+      durationMs: computedDurationMs,
       totalCustomers,
     },
   }

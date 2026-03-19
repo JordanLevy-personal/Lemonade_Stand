@@ -1,5 +1,14 @@
 import { startTransition, useEffect, useRef, useState } from 'react'
 import type { CSSProperties, JSX } from 'react'
+import {
+  CartesianGrid,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts'
 
 import './App.css'
 import Customer1Sprite from './assets/customers/customer_1.png'
@@ -33,6 +42,13 @@ const RECIPE_STEP = 0.1
 const ICE_RECIPE_STEP = 1
 const RECIPE_MAX = 5
 const INVENTORY_PRECISION = 1
+const SATISFACTION_APPROVAL_THRESHOLD = 0.55
+const BASE_SIMULATION_SPEED = 1
+const MIN_DEV_SIMULATION_SPEED = 0.25
+const MAX_DEV_SIMULATION_SPEED = 2
+const SHOW_DEV_CONTROLS = import.meta.env.DEV || import.meta.env.MODE === 'test'
+
+type ResultsChartMetric = 'revenue' | 'profit' | 'reputation'
 
 interface StoredRoomSession {
   roomId: string
@@ -210,7 +226,7 @@ function inventoryForSimulation(
   const resolvedSales = events.filter(
     (event) =>
       event.outcome === 'buy' &&
-      event.chosenPlayerId === player.id &&
+      event.targetPlayerId === player.id &&
       isEventResolved(event, elapsedMs),
   ).length
   const openingInventory = addRecipe(
@@ -250,49 +266,188 @@ function closeMessage(code: number, reason: string, wasClean: boolean): string {
   return `The room connection closed unexpectedly. Code ${code}. Reason: ${describeCloseReason(reason)}`
 }
 
-function eventProgress(event: CustomerEvent, elapsedMs: number): number {
-  const resolveAt = event.arrivalOffsetMs + 1_500
-  if (elapsedMs <= event.arrivalOffsetMs) {
-    return 0
-  }
-
-  return clamp((elapsedMs - event.arrivalOffsetMs) / Math.max(resolveAt - event.arrivalOffsetMs, 1), 0, 1)
-}
-
 function isEventVisible(event: CustomerEvent, elapsedMs: number): boolean {
-  return elapsedMs >= event.arrivalOffsetMs && elapsedMs <= event.arrivalOffsetMs + 1_500
+  return elapsedMs >= event.spawnAt && elapsedMs <= event.exitAt
 }
 
 function isEventResolved(event: CustomerEvent, elapsedMs: number): boolean {
-  return elapsedMs >= event.arrivalOffsetMs + 1_500
+  return elapsedMs >= event.outcomeAt
 }
 
-function currentElapsedMs(room: RoomState | null, simulationStartAtMs: number | null, nowMs: number): number {
+function currentElapsedMsWithSpeed(
+  room: RoomState | null,
+  simulationStartAtMs: number | null,
+  nowMs: number,
+  simulationSpeed: number,
+): number {
   if (room?.phase !== 'simulating' || room.simulation === null || simulationStartAtMs === null) {
     return 0
   }
 
-  return clamp(nowMs - simulationStartAtMs, 0, room.simulation.durationMs)
+  const playbackFactor = simulationSpeed
+  return clamp((nowMs - simulationStartAtMs) * playbackFactor, 0, room.simulation.durationMs)
 }
 
-function buildSceneStyle(event: CustomerEvent, elapsedMs: number, players: RoomState['players']): CSSProperties {
-  const progress = eventProgress(event, elapsedMs)
-  const targetIndex = Math.max(
-    0,
-    players.findIndex((player) => player.id === event.chosenPlayerId),
-  )
-  const startX = 50
-  const targetX = event.chosenPlayerId === null ? 50 : targetIndex === 0 ? 18 : 82
-  const xJitter = Math.sin((event.id.length + 3) * 12.7) * 1.5
-  const yJitter = Math.cos((event.id.length + 9) * 4.1) * 1.2
-  const lane = event.id.length % 3
-  const xPercent = startX + (targetX - startX) * progress + xJitter
-  const yPercent = 8 + progress * 64 + lane * 5 + yJitter
+function interpolate(start: number, end: number, progress: number): number {
+  return start + (end - start) * clamp(progress, 0, 1)
+}
+
+function standXPercent(room: RoomState, playerId: string): number {
+  if (room.targetPlayerCount === 1) {
+    return 50
+  }
+
+  const visiblePlayers = room.players
+  const playerIndex = visiblePlayers.findIndex((player) => player.id === playerId)
+  return playerIndex <= 0 ? 18 : 82
+}
+
+function stopXPercent(event: CustomerEvent, room: RoomState, playerId: string, stopIndex: number): number {
+  const standCenter = standXPercent(room, playerId)
+  const standHalfWidth = room.targetPlayerCount === 1 ? 8 : 6
+  const spreadSeed = Math.sin((event.customerIndex + 1) * 12.9898 + (stopIndex + 1) * 78.233)
+  const normalizedSpread = Math.max(-1, Math.min(1, spreadSeed))
+
+  return standCenter + normalizedSpread * standHalfWidth
+}
+
+function activeStop(event: CustomerEvent, elapsedMs: number) {
+  return event.standStops.find(
+    (stop) =>
+      stop.departAt > stop.arriveAt &&
+      elapsedMs >= stop.arriveAt &&
+      elapsedMs <= stop.departAt,
+  ) ?? null
+}
+
+function buildSceneStyle(event: CustomerEvent, elapsedMs: number, room: RoomState): CSSProperties {
+  const startX = -10 + event.xJitter * 10
+  const exitX = 108 + event.xJitter * 12
+  const laneBottom = 16 + event.lane * 7 + event.yJitter * 12
+  const isStopped = activeStop(event, elapsedMs) !== null
+  const stopBottom = 34 + event.lane * 4 + event.yJitter * 8
+  let xPercent = startX
+  let yPercent = isStopped ? stopBottom : laneBottom
+
+  if (event.standStops.length === 0) {
+    const progress = (elapsedMs - event.spawnAt) / Math.max(event.exitAt - event.spawnAt, 1)
+    xPercent = interpolate(startX, exitX, progress)
+  } else {
+    const firstStop = event.standStops[0]
+
+    if (elapsedMs <= firstStop.arriveAt) {
+      const progress = (elapsedMs - event.spawnAt) / Math.max(firstStop.arriveAt - event.spawnAt, 1)
+      xPercent = interpolate(startX, stopXPercent(event, room, firstStop.playerId, 0), progress)
+    } else {
+      const currentStopIndex = event.standStops.findIndex(
+        (candidate) =>
+          candidate.departAt > candidate.arriveAt &&
+          elapsedMs >= candidate.arriveAt &&
+          elapsedMs <= candidate.departAt,
+      )
+
+      if (currentStopIndex !== -1) {
+        xPercent = stopXPercent(event, room, event.standStops[currentStopIndex]!.playerId, currentStopIndex)
+        yPercent = stopBottom
+      } else {
+        let positioned = false
+        for (let index = 0; index < event.standStops.length - 1; index += 1) {
+          const currentStop = event.standStops[index]!
+          const nextStop = event.standStops[index + 1]!
+
+          if (elapsedMs > currentStop.departAt && elapsedMs < nextStop.arriveAt) {
+            const progress = (elapsedMs - currentStop.departAt) / Math.max(nextStop.arriveAt - currentStop.departAt, 1)
+            xPercent = interpolate(
+              stopXPercent(event, room, currentStop.playerId, index),
+              stopXPercent(event, room, nextStop.playerId, index + 1),
+              progress,
+            )
+            positioned = true
+            break
+          }
+        }
+
+        if (!positioned) {
+          const lastStop = event.standStops[event.standStops.length - 1]!
+          if (elapsedMs > lastStop.departAt) {
+            const progress = (elapsedMs - event.outcomeAt) / Math.max(event.exitAt - event.outcomeAt, 1)
+            xPercent = interpolate(
+              stopXPercent(event, room, lastStop.playerId, event.standStops.length - 1),
+              exitX,
+              progress,
+            )
+          } else {
+            xPercent = stopXPercent(event, room, lastStop.playerId, event.standStops.length - 1)
+          }
+        }
+      }
+    }
+  }
 
   return {
     left: `${xPercent}%`,
     bottom: `${yPercent}%`,
   }
+}
+
+function shouldShowPurchaseReaction(event: CustomerEvent, elapsedMs: number): boolean {
+  return event.outcome === 'buy' && elapsedMs >= event.outcomeAt && elapsedMs <= event.exitAt
+}
+
+function purchaseReactionLabel(event: CustomerEvent): string {
+  return event.satisfaction >= SATISFACTION_APPROVAL_THRESHOLD ? '👍' : '👎'
+}
+
+function formatSignedNumber(value: number): string {
+  return `${value >= 0 ? '+' : ''}${value}`
+}
+
+function latestHistoryEntry(player: RoomState['players'][number]) {
+  return player.history[player.history.length - 1] ?? null
+}
+
+function chartTitle(metric: ResultsChartMetric): string {
+  if (metric === 'profit') {
+    return 'Profit Over Time'
+  }
+
+  if (metric === 'reputation') {
+    return 'Reputation Over Time'
+  }
+
+  return 'Revenue Over Time'
+}
+
+function chartValue(event: RoomState['players'][number]['history'][number], metric: ResultsChartMetric): number {
+  if (metric === 'profit') {
+    return event.profit
+  }
+
+  if (metric === 'reputation') {
+    return event.reputationAfter
+  }
+
+  return event.revenue
+}
+
+function buildChartData(players: RoomState['players'], metric: ResultsChartMetric): Array<Record<string, number | null>> {
+  const days = new Set<number>()
+  players.forEach((player) => {
+    player.history.forEach((entry) => {
+      days.add(entry.day)
+    })
+  })
+
+  return [...days]
+    .sort((left, right) => left - right)
+    .map((day) => {
+      const row: Record<string, number | null> = { day }
+      players.forEach((player) => {
+        const entry = player.history.find((historyEntry) => historyEntry.day === day)
+        row[player.id] = entry === undefined ? null : chartValue(entry, metric)
+      })
+      return row
+    })
 }
 
 function buildPlan(currentPlayer: ReturnType<typeof findCurrentPlayer>): DailyPlan {
@@ -380,6 +535,9 @@ function RangeSliderField({
   max,
   step,
   onChange,
+  displayValue,
+  minLabel,
+  maxLabel,
 }: {
   label: string
   value: number
@@ -387,13 +545,16 @@ function RangeSliderField({
   max: number
   step: number
   onChange: (value: number) => void
+  displayValue?: string
+  minLabel?: string
+  maxLabel?: string
 }): JSX.Element {
   return (
     <label className="field range-field">
       <span className="field-heading">
         <span className="field-label">{label}</span>
         <span className="field-value" aria-hidden="true">
-          {value}
+          {displayValue ?? value}
         </span>
       </span>
       <input
@@ -407,8 +568,8 @@ function RangeSliderField({
         onChange={(event) => onChange(numberValue(event.target.value))}
       />
       <span className="range-scale" aria-hidden="true">
-        <span>{min}</span>
-        <span>{max}</span>
+        <span>{minLabel ?? min}</span>
+        <span>{maxLabel ?? max}</span>
       </span>
     </label>
   )
@@ -748,10 +909,14 @@ function SimulationScreen({
   room,
   elapsedMs,
   currentPlayer,
+  simulationSpeed,
+  onSimulationSpeedChange,
 }: {
   room: RoomState
   elapsedMs: number
   currentPlayer: NonNullable<ReturnType<typeof findCurrentPlayer>>
+  simulationSpeed: number
+  onSimulationSpeedChange: (value: number) => void
 }): JSX.Element {
   const simulation = room.simulation
   if (simulation === null) {
@@ -767,7 +932,7 @@ function SimulationScreen({
   const visibleEvents = simulation.customerEvents.filter((event) => isEventVisible(event, elapsedMs))
   const resolvedEvents = simulation.customerEvents.filter((event) => isEventResolved(event, elapsedMs))
   const playerSales = room.players.map((player) =>
-    resolvedEvents.filter((event) => event.outcome === 'buy' && event.chosenPlayerId === player.id).length,
+    resolvedEvents.filter((event) => event.outcome === 'buy' && event.targetPlayerId === player.id).length,
   )
   const liveInventory = inventoryForSimulation(currentPlayer, simulation.customerEvents, elapsedMs)
   const visiblePlayers = room.targetPlayerCount === 1 ? room.players.slice(0, 1) : room.players
@@ -790,12 +955,39 @@ function SimulationScreen({
         <MetricCard label="Timeline" value={`${Math.round((elapsedMs / simulation.durationMs) * 100)}%`} />
       </div>
 
+      {SHOW_DEV_CONTROLS ? (
+        <section className="panel">
+          <p className="eyebrow">Developer Mode</p>
+          <h2>Simulation Speed</h2>
+          <RangeSliderField
+            label="Simulation Speed"
+            value={simulationSpeed}
+            min={MIN_DEV_SIMULATION_SPEED}
+            max={MAX_DEV_SIMULATION_SPEED}
+            step={0.25}
+            displayValue={`${simulationSpeed.toFixed(2)}x`}
+            minLabel={`${MIN_DEV_SIMULATION_SPEED.toFixed(2)}x`}
+            maxLabel={`${MAX_DEV_SIMULATION_SPEED.toFixed(2)}x`}
+            onChange={onSimulationSpeedChange}
+          />
+          <p className="muted">
+            The slower production baseline is now treated as 1x. Lower this in developer mode for slow motion or raise it to fast-forward local testing.
+          </p>
+        </section>
+      ) : null}
+
       <section className="panel crowd-panel">
         <div className="crowd-scene">
           <div className="crowd-road" aria-hidden="true" />
           {visiblePlayers.map((player, index) => (
             <div
-              className={index === 0 ? 'stand-column stand-column-left' : 'stand-column stand-column-right'}
+              className={
+                visiblePlayers.length === 1
+                  ? 'stand-column stand-column-solo'
+                  : index === 0
+                    ? 'stand-column stand-column-left'
+                    : 'stand-column stand-column-right'
+              }
               key={player.id}
             >
               <p className="stand-name">{player.name}</p>
@@ -805,7 +997,19 @@ function SimulationScreen({
           ))}
 
           {visibleEvents.map((event) => (
-            <div className={`crowd-customer crowd-${event.outcome}`} key={event.id} style={buildSceneStyle(event, elapsedMs, room.players)}>
+            <div className={`crowd-customer crowd-${event.outcome}`} key={event.id} style={buildSceneStyle(event, elapsedMs, room)}>
+              {shouldShowPurchaseReaction(event, elapsedMs) ? (
+                <span
+                  aria-label="customer approval reaction"
+                  className={
+                    event.satisfaction >= SATISFACTION_APPROVAL_THRESHOLD
+                      ? 'reaction-badge reaction-badge-positive'
+                      : 'reaction-badge reaction-badge-negative'
+                  }
+                >
+                  {purchaseReactionLabel(event)}
+                </span>
+              ) : null}
               <img
                 className="customer-sprite"
                 src={event.id.length % 2 === 0 ? Customer1Sprite : Customer2Sprite}
@@ -840,6 +1044,9 @@ function ResultsScreen({
   const hasRequestedNextDay =
     currentPlayerId !== null && room.requestedNextDayPlayerIds.includes(currentPlayerId)
   const isSingleplayerRoom = room.targetPlayerCount === 1
+  const [selectedMetric, setSelectedMetric] = useState<ResultsChartMetric>('revenue')
+  const chartData = buildChartData(room.players, selectedMetric)
+  const hasHistory = room.players.some((player) => player.history.length > 0)
 
   return (
     <section className="app-stage">
@@ -861,12 +1068,73 @@ function ResultsScreen({
             <div className="metric-grid compact-grid">
               <MetricCard label="Cups Sold" value={`${player.dailyResults?.cupsSold ?? 0}`} />
               <MetricCard label="Revenue" value={formatMoney(player.dailyResults?.revenue ?? 0)} />
+              <MetricCard label="Profit" value={formatMoney(latestHistoryEntry(player)?.profit ?? 0)} />
+              <MetricCard label="End Rep" value={`${latestHistoryEntry(player)?.reputationAfter ?? player.reputation}/100`} />
               <MetricCard label="Satisfaction" value={`${Math.round((player.dailyResults?.satisfaction ?? 0) * 100)}%`} />
-              <MetricCard label="Rep Change" value={`${(player.dailyResults?.reputationDelta ?? 0) >= 0 ? '+' : ''}${player.dailyResults?.reputationDelta ?? 0}`} />
+              <MetricCard label="Rep Change" value={formatSignedNumber(player.dailyResults?.reputationDelta ?? 0)} />
             </div>
           </section>
         ))}
       </div>
+
+      <section className="panel">
+        <p className="eyebrow">History</p>
+        <div className="results-chart-header">
+          <h2>{chartTitle(selectedMetric)}</h2>
+          <div aria-label="Results chart filters" className="results-filter-row" role="group">
+            {(['revenue', 'profit', 'reputation'] as const).map((metric) => (
+              <button
+                aria-pressed={selectedMetric === metric}
+                className={selectedMetric === metric ? 'filter-chip filter-chip-active' : 'filter-chip'}
+                key={metric}
+                onClick={() => setSelectedMetric(metric)}
+                type="button"
+              >
+                {metric === 'revenue' ? 'Revenue' : metric === 'profit' ? 'Profit' : 'Reputation'}
+              </button>
+            ))}
+          </div>
+        </div>
+        {hasHistory ? (
+          <div className="results-chart-shell">
+            <ResponsiveContainer height="100%" width="100%">
+              <LineChart data={chartData}>
+                <CartesianGrid strokeDasharray="3 3" opacity={0.25} />
+                <XAxis allowDecimals={false} dataKey="day" />
+                <YAxis allowDecimals={selectedMetric !== 'reputation'} />
+                <Tooltip
+                  formatter={(value) => {
+                    const numericValue = typeof value === 'number' ? value : Number(value)
+
+                    if (value === null || value === undefined || Number.isNaN(numericValue)) {
+                      return 'No data'
+                    }
+
+                    return selectedMetric === 'reputation'
+                      ? `${Math.round(numericValue)}/100`
+                      : formatMoney(numericValue)
+                  }}
+                  labelFormatter={(day) => `Day ${day}`}
+                />
+                {room.players.map((player) => (
+                  <Line
+                    connectNulls
+                    dataKey={player.id}
+                    dot={false}
+                    key={player.id}
+                    name={player.name}
+                    stroke={player.faction.accentColor}
+                    strokeWidth={3}
+                    type="monotone"
+                  />
+                ))}
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        ) : (
+          <p className="muted">Play another day to start building a trend line for this stand.</p>
+        )}
+      </section>
 
       <div className="panel">
         <button
@@ -921,6 +1189,7 @@ function App(): JSX.Element {
     price: defaultBalanceConfig.defaultPrice,
   })
   const [simulationStartAtMs, setSimulationStartAtMs] = useState<number | null>(null)
+  const [simulationSpeed, setSimulationSpeed] = useState(BASE_SIMULATION_SPEED)
   const [clockNowMs, setClockNowMs] = useState(() => Date.now())
   const [error, setError] = useState<string | null>(null)
   const connectionRef = useRef<RoomConnection | null>(null)
@@ -929,7 +1198,7 @@ function App(): JSX.Element {
   const analyticsPlayerIdRef = useRef<string>(readOrCreateAnalyticsPlayerId())
 
   const currentPlayer = findCurrentPlayer(room, session?.playerId ?? null)
-  const elapsedMs = currentElapsedMs(room, simulationStartAtMs, clockNowMs)
+  const elapsedMs = currentElapsedMsWithSpeed(room, simulationStartAtMs, clockNowMs, simulationSpeed)
 
   useEffect(() => {
     if (room?.phase !== 'simulating') {
@@ -954,13 +1223,15 @@ function App(): JSX.Element {
         weather: room?.weather ?? null,
         playerId: session?.playerId ?? null,
         elapsedMs,
+        simulationSpeed,
         visibleCustomers:
           room?.simulation?.customerEvents
             .filter((event) => isEventVisible(event, elapsedMs))
             .map((event) => ({
               id: event.id,
-              targetPlayerId: event.chosenPlayerId,
+              targetPlayerId: event.targetPlayerId,
               outcome: event.outcome,
+              resolved: isEventResolved(event, elapsedMs),
             })) ?? [],
       })
 
@@ -978,7 +1249,7 @@ function App(): JSX.Element {
       delete appWindow.advanceTime
       delete appWindow.render_game_to_text
     }
-  }, [elapsedMs, room, session?.playerId])
+  }, [elapsedMs, room, session?.playerId, simulationSpeed])
 
   function updateSession(nextSession: StoredRoomSession): void {
     sessionRef.current = nextSession
@@ -1225,7 +1496,13 @@ function App(): JSX.Element {
         />
       ) : null}
       {room?.phase === 'simulating' && currentPlayer !== null ? (
-        <SimulationScreen room={room} elapsedMs={elapsedMs} currentPlayer={currentPlayer} />
+        <SimulationScreen
+          room={room}
+          elapsedMs={elapsedMs}
+          currentPlayer={currentPlayer}
+          simulationSpeed={simulationSpeed}
+          onSimulationSpeedChange={setSimulationSpeed}
+        />
       ) : null}
       {room?.phase === 'results' ? (
         <ResultsScreen

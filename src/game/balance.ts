@@ -12,7 +12,7 @@ export const defaultBalanceConfig: BalanceConfig = {
   maxPlayers: 2,
   reputationMin: 0,
   reputationMax: 100,
-  simulationDurationMs: 7_000,
+  simulationDurationMs: 28_000,
   weatherProfiles: {
     sunny: {
       label: 'Sunny',
