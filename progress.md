@@ -53,3 +53,17 @@ Original prompt: ok lets add a quick feature for computing the amount of cups th
 - Introduced a reusable `RangeSliderField`, swapped the three recipe controls to it, and styled the slider presentation to match the current planning UI.
 - Validation passed with targeted App tests, the full Vitest suite, a production build, the required `web_game_playwright_client` run, and a two-page Playwright browser sanity pass with screenshot artifact `output/web-game/recipe-sliders-planning/host-planning.png`.
 - Browser sanity showed the planning screen rendering the slider controls correctly with no host/guest console errors during the live host/join flow.
+
+## 2026-03-18 22:48:12 PDT
+
+- Began the multiplayer player scaling session on `codex/multiplayer-player-scaling` in a dedicated worktree.
+- Confirmed the original prompt remains recorded above and created a matching task workspace at `tasks/active/multiplayer-player-scaling/`.
+- Current plan of attack: add failing tests for 3-4 player hosting/readiness/layout, implement shared player-count validation plus count-aware UI, then run targeted and browser-level validation before opening a PR.
+
+## 2026-03-18 23:41:30 PDT
+
+- Added 4-player TDD coverage in the room manager and App suites before changing the implementation.
+- Shipped shared player-count validation, a multiplayer room-size selector, count-aware waiting/planning/results copy, and four-stand simulation layout support with compact stand styling for larger rooms.
+- Added a `WS_PROXY_TARGET_PORT` Vite dev-server override so the worktree client can validate against a non-3001 server when another local session is already using that default port.
+- Validation passed with the full Vitest suite, a production build, the bundled multiplayer entry Playwright script, and a separate four-context Playwright sanity run that reached live simulation with four visible stands and no browser errors.
+- Telemetry review outcome: no catalog changes needed because `playerCount` is already captured for both game-level and player-day analysis.

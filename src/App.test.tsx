@@ -35,6 +35,13 @@ const MARKET_FACTION: FactionDefinition = {
   accentColor: '#4b8e8d',
 }
 
+const PLAYER_FIXTURES = [
+  { id: 'player-host', name: 'Alex', faction: SUN_FACTION },
+  { id: 'player-guest', name: 'Blair', faction: MARKET_FACTION },
+  { id: 'player-third', name: 'Casey', faction: SUN_FACTION },
+  { id: 'player-fourth', name: 'Devon', faction: MARKET_FACTION },
+] as const
+
 function createRoom(overrides: Partial<RoomState> = {}): RoomState {
   return {
     roomId: 'ROOM-42',
@@ -52,66 +59,40 @@ function createRoom(overrides: Partial<RoomState> = {}): RoomState {
     simulation: null,
     pausedFromPhase: null,
     requestedNextDayPlayerIds: [],
-    players: [
-      {
-        id: 'player-host',
-        name: 'Alex',
-        faction: SUN_FACTION,
-        money: 20,
-        inventory: {
-          lemons: 0,
-          sugar: 0,
-          ice: 0,
-        },
-        reputation: 50,
-        hasSubmittedPlan: false,
-        connectionStatus: 'connected',
-        dailyPlan: {
-          purchases: {
-            lemons: 1,
-            sugar: 1,
-            ice: 1,
-          },
-          recipe: {
-            lemons: 2,
-            sugar: 2,
-            ice: 3,
-          },
-          price: 1.4,
-        },
-        dailyResults: null,
-      },
-      {
-        id: 'player-guest',
-        name: 'Blair',
-        faction: MARKET_FACTION,
-        money: 20,
-        inventory: {
-          lemons: 0,
-          sugar: 0,
-          ice: 0,
-        },
-        reputation: 50,
-        hasSubmittedPlan: false,
-        connectionStatus: 'connected',
-        dailyPlan: {
-          purchases: {
-            lemons: 1,
-            sugar: 1,
-            ice: 1,
-          },
-          recipe: {
-            lemons: 2,
-            sugar: 2,
-            ice: 2,
-          },
-          price: 1.5,
-        },
-        dailyResults: null,
-      },
-    ],
+    players: createPlayers(2),
     ...overrides,
   }
+}
+
+function createPlayers(playerCount: number): RoomState['players'] {
+  return PLAYER_FIXTURES.slice(0, playerCount).map((player, index) => ({
+    id: player.id,
+    name: player.name,
+    faction: player.faction,
+    money: 20,
+    inventory: {
+      lemons: 0,
+      sugar: 0,
+      ice: 0,
+    },
+    reputation: 50,
+    hasSubmittedPlan: false,
+    connectionStatus: 'connected' as const,
+    dailyPlan: {
+      purchases: {
+        lemons: 1,
+        sugar: 1,
+        ice: 1,
+      },
+      recipe: {
+        lemons: 2,
+        sugar: 2,
+        ice: index === 0 ? 3 : 2,
+      },
+      price: 1.4 + index * 0.1,
+    },
+    dailyResults: null,
+  }))
 }
 
 function createHostRoom(
@@ -209,6 +190,25 @@ describe('App', () => {
     )
   })
 
+  it('creates a four-player room from the lobby when the host selects four players', () => {
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.change(screen.getByLabelText(/players in room/i), {
+      target: { value: '4' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    expect(sendMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'create_room',
+        targetPlayerCount: 4,
+      }),
+    )
+  })
+
   it('creates a singleplayer room from the lobby', () => {
     render(<App />)
 
@@ -252,6 +252,38 @@ describe('App', () => {
     expect(screen.getByText(/share your .*client url/i)).toBeInTheDocument()
     expect(screen.getByText(/join room room-42/i)).toBeInTheDocument()
     expect(screen.queryByText(/lan/i)).not.toBeInTheDocument()
+  })
+
+  it('shows the joined roster and open seats for a four-player waiting room', () => {
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.change(screen.getByLabelText(/players in room/i), {
+      target: { value: '4' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'room_state',
+      room: createRoom({
+        phase: 'lobby',
+        targetPlayerCount: 4,
+        players: createPlayers(3),
+      }),
+    })
+
+    expect(screen.getByText(/1 seat open/i)).toBeInTheDocument()
+    expect(screen.getByText(/alex/i)).toBeInTheDocument()
+    expect(screen.getByText(/blair/i)).toBeInTheDocument()
+    expect(screen.getByText(/casey/i)).toBeInTheDocument()
   })
 
   it('submits a private plan during planning', () => {
@@ -612,6 +644,66 @@ describe('App', () => {
     expect(screen.getAllByText(/blair/i).length).toBeGreaterThan(0)
   })
 
+  it('renders all four stands during a four-player simulation', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-03-16T12:00:02.000Z'))
+
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.change(screen.getByLabelText(/players in room/i), {
+      target: { value: '4' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'simulation_started',
+      simulationStartAt: Date.parse('2026-03-16T12:00:00.000Z'),
+      room: createRoom({
+        phase: 'simulating',
+        targetPlayerCount: 4,
+        players: createPlayers(4),
+        simulation: {
+          durationMs: 6000,
+          simulationStartAt: Date.parse('2026-03-16T12:00:00.000Z'),
+          customerEvents: [
+            {
+              id: 'event-a',
+              arrivalOffsetMs: 0,
+              willingnessToPay: 2,
+              chosenPlayerId: 'player-host',
+              outcome: 'buy',
+              salePrice: 1.5,
+              satisfaction: 0.8,
+            },
+            {
+              id: 'event-b',
+              arrivalOffsetMs: 400,
+              willingnessToPay: 2.2,
+              chosenPlayerId: 'player-fourth',
+              outcome: 'buy',
+              salePrice: 1.7,
+              satisfaction: 0.9,
+            },
+          ],
+        },
+      }),
+    })
+
+    expect(screen.getByAltText(/alex stand/i)).toBeInTheDocument()
+    expect(screen.getByAltText(/blair stand/i)).toBeInTheDocument()
+    expect(screen.getByAltText(/casey stand/i)).toBeInTheDocument()
+    expect(screen.getByAltText(/devon stand/i)).toBeInTheDocument()
+  })
+
   it('shows only one stand during a singleplayer simulation', () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-03-16T12:00:02.000Z'))
@@ -787,6 +879,48 @@ describe('App', () => {
       roomId: 'ROOM-42',
       playerId: 'player-host',
     })
+  })
+
+  it('uses all-player copy for multiplayer results in larger rooms', () => {
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.change(screen.getByLabelText(/players in room/i), {
+      target: { value: '4' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'room_state',
+      room: createRoom({
+        phase: 'results',
+        targetPlayerCount: 4,
+        players: createPlayers(4).map((player) => ({
+          ...player,
+          dailyResults: {
+            cupsSold: 8,
+            revenue: 12,
+            satisfaction: 0.72,
+            reputationDelta: 2,
+            customersWon: 8,
+            customersSkipped: 3,
+            customersSoldOut: 0,
+          },
+        })),
+      }),
+    })
+
+    expect(screen.getByText(/compare all stands/i)).toBeInTheDocument()
+    expect(screen.getByText(/when everyone is ready/i)).toBeInTheDocument()
+    expect(screen.queryByText(/compare both stands/i)).not.toBeInTheDocument()
   })
 
   it('uses next day copy for singleplayer results', () => {
