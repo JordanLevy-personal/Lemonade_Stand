@@ -79,6 +79,11 @@
   gap: 0.25rem;
 }
 
+.buy-field-grid .field-input {
+  padding: 0.5rem 0.6rem;
+  font-size: 0.88rem;
+}
+
 .capacity-hint {
   font-size: 0.78rem;
   color: rgba(29, 74, 79, 0.62);
