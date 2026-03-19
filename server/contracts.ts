@@ -1,6 +1,7 @@
 import type { CustomerProfile } from '../src/game/types'
 
 export type RoomPhase = 'lobby' | 'planning' | 'simulating' | 'results' | 'paused'
+export type GameMode = 'singleplayer' | 'multiplayer'
 
 export type ConnectionStatus = 'connected' | 'disconnected'
 
@@ -80,6 +81,8 @@ export interface PlayerState {
 export interface RoomState {
   roomId: string
   hostPlayerId: string
+  gameMode: GameMode
+  targetPlayerCount: number
   day: number
   weather: Weather
   phase: RoomPhase
@@ -95,6 +98,8 @@ export interface RoomState {
 export interface CreateRoomMessage {
   type: 'create_room'
   name: string
+  gameMode: GameMode
+  targetPlayerCount: number
   faction: FactionSelection
   analyticsPlayerId: string
 }

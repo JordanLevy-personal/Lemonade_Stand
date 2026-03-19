@@ -1,4 +1,5 @@
 export type RoomPhase = 'lobby' | 'planning' | 'simulating' | 'results' | 'paused'
+export type GameMode = 'singleplayer' | 'multiplayer'
 
 export type Weather = 'sunny' | 'hot' | 'cloudy' | 'raining'
 
@@ -70,6 +71,8 @@ export interface RoomSimulation {
 export interface RoomState {
   roomId: string
   hostPlayerId: string
+  gameMode: GameMode
+  targetPlayerCount: number
   day: number
   weather: Weather | null
   phase: RoomPhase
@@ -112,6 +115,8 @@ export type ServerMessage =
 export interface CreateRoomMessage {
   type: 'create_room'
   name: string
+  gameMode: GameMode
+  targetPlayerCount: number
   faction: FactionDefinition
   analyticsPlayerId: string
 }

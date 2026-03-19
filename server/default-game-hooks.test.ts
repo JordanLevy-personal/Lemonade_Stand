@@ -39,6 +39,8 @@ describe('default game hooks', () => {
       roomId: 'ROOM01',
       playerId: 'host-1',
       name: 'Host',
+      gameMode: 'multiplayer',
+      targetPlayerCount: 2,
       faction: HOST_FACTION,
       analyticsPlayerId: 'analytics-host',
     })

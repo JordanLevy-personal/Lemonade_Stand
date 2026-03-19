@@ -10,7 +10,7 @@ import type {
   Inventory,
   Recipe,
 } from '../src/game/types'
-import type { Weather } from './contracts'
+import type { GameMode, Weather } from './contracts'
 
 interface SqliteTelemetryRepositoryOptions {
   databasePath: string
@@ -21,6 +21,8 @@ export interface GameTelemetryRecord {
   gameId: string
   roomId: string
   rngSeed: number
+  gameMode: GameMode
+  playerCount: number
 }
 
 export interface PlayerDayPlanTelemetryRecord {
@@ -28,6 +30,8 @@ export interface PlayerDayPlanTelemetryRecord {
   dayNumber: number
   playerId: string
   analyticsPlayerId: string
+  gameMode: GameMode
+  playerCount: number
   factionId: string
   weather: Weather
   marketBasePrices: Inventory
@@ -120,6 +124,8 @@ export class SqliteTelemetryRepository implements TelemetryRepository {
         game_id text primary key,
         room_id text not null,
         rng_seed integer not null,
+        game_mode text not null,
+        player_count integer not null,
         created_at text not null,
         last_activity_at text not null
       );
@@ -129,6 +135,8 @@ export class SqliteTelemetryRepository implements TelemetryRepository {
         day_number integer not null,
         player_id text not null,
         analytics_player_id text not null,
+        game_mode text not null,
+        player_count integer not null,
         faction_id text not null,
         weather text not null,
         market_base_price_lemons real not null,
@@ -209,6 +217,10 @@ export class SqliteTelemetryRepository implements TelemetryRepository {
         primary key (game_id, day_number, customer_event_id, player_id)
       );
     `)
+    this.ensureColumn('games', 'game_mode', "text not null default 'multiplayer'")
+    this.ensureColumn('games', 'player_count', 'integer not null default 2')
+    this.ensureColumn('player_day_records', 'game_mode', "text not null default 'multiplayer'")
+    this.ensureColumn('player_day_records', 'player_count', 'integer not null default 2')
   }
 
   close(): void {
@@ -224,23 +236,31 @@ export class SqliteTelemetryRepository implements TelemetryRepository {
         game_id,
         room_id,
         rng_seed,
+        game_mode,
+        player_count,
         created_at,
         last_activity_at
       ) values (
         :gameId,
         :roomId,
         :rngSeed,
+        :gameMode,
+        :playerCount,
         :createdAt,
         :lastActivityAt
       )
       on conflict(game_id) do update set
         room_id = excluded.room_id,
         rng_seed = excluded.rng_seed,
+        game_mode = excluded.game_mode,
+        player_count = excluded.player_count,
         last_activity_at = excluded.last_activity_at
     `).run({
       gameId: record.gameId,
       roomId: record.roomId,
       rngSeed: record.rngSeed,
+      gameMode: record.gameMode,
+      playerCount: record.playerCount,
       createdAt: timestamp,
       lastActivityAt: timestamp,
     })
@@ -264,6 +284,8 @@ export class SqliteTelemetryRepository implements TelemetryRepository {
         day_number,
         player_id,
         analytics_player_id,
+        game_mode,
+        player_count,
         faction_id,
         weather,
         market_base_price_lemons,
@@ -287,6 +309,8 @@ export class SqliteTelemetryRepository implements TelemetryRepository {
         :dayNumber,
         :playerId,
         :analyticsPlayerId,
+        :gameMode,
+        :playerCount,
         :factionId,
         :weather,
         :marketBasePriceLemons,
@@ -308,6 +332,8 @@ export class SqliteTelemetryRepository implements TelemetryRepository {
       )
       on conflict(game_id, day_number, player_id) do update set
         analytics_player_id = excluded.analytics_player_id,
+        game_mode = excluded.game_mode,
+        player_count = excluded.player_count,
         faction_id = excluded.faction_id,
         weather = excluded.weather,
         market_base_price_lemons = excluded.market_base_price_lemons,
@@ -331,6 +357,8 @@ export class SqliteTelemetryRepository implements TelemetryRepository {
       dayNumber: record.dayNumber,
       playerId: record.playerId,
       analyticsPlayerId: record.analyticsPlayerId,
+      gameMode: record.gameMode,
+      playerCount: record.playerCount,
       factionId: record.factionId,
       weather: record.weather,
       marketBasePriceLemons: record.marketBasePrices.lemons,
@@ -537,5 +565,20 @@ export class SqliteTelemetryRepository implements TelemetryRepository {
     }
 
     return this.database
+  }
+
+  private ensureColumn(tableName: string, columnName: string, definition: string): void {
+    const existingColumns = this.requireDatabase()
+      .prepare(`pragma table_info(${tableName})`)
+      .all() as Array<{ name: string }>
+
+    if (existingColumns.some((column) => column.name === columnName)) {
+      return
+    }
+
+    this.requireDatabase().exec(`
+      alter table ${tableName}
+      add column ${columnName} ${definition}
+    `)
   }
 }

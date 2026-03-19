@@ -1,6 +1,7 @@
 import type {
   DailyPlan,
   FactionSelection,
+  GameMode,
   MarketBasePrices,
   PlayerState,
   RoomPhase,
@@ -31,6 +32,8 @@ interface CreateRoomInput {
   roomId: string
   playerId: string
   name: string
+  gameMode: GameMode
+  targetPlayerCount: number
   faction: FactionSelection
   analyticsPlayerId: string
 }
@@ -77,6 +80,10 @@ function readyPlayers(room: RoomState): number {
   return room.players.filter((player) => player.hasSubmittedPlan).length
 }
 
+function requiredPlayerCount(room: Pick<RoomState, 'targetPlayerCount'>): number {
+  return Math.max(1, room.targetPlayerCount)
+}
+
 function reconnectExistingPlayer(
   room: RoomState,
   playerId: string,
@@ -106,7 +113,7 @@ function reconnectExistingPlayer(
 }
 
 function planningPhase(room: RoomState): RoomState {
-  if (room.players.length < 2) {
+  if (room.players.length < requiredPlayerCount(room)) {
     return {
       ...room,
       phase: 'lobby',
@@ -144,9 +151,11 @@ export class RoomManager {
     const room: RoomState = {
       roomId: input.roomId,
       hostPlayerId: input.playerId,
+      gameMode: input.gameMode,
+      targetPlayerCount: Math.max(1, input.targetPlayerCount),
       day: 1,
       weather,
-      phase: 'lobby',
+      phase: input.targetPlayerCount === 1 ? 'planning' : 'lobby',
       players: [
         {
           id: input.playerId,
@@ -208,7 +217,7 @@ export class RoomManager {
       return resumed
     }
 
-    if (room.players.length >= 2) {
+    if (room.players.length >= requiredPlayerCount(room)) {
       throw new Error('That room is already full.')
     }
 
@@ -260,7 +269,11 @@ export class RoomManager {
       ),
     }
 
-    if (readyPlayers(updatedRoom) < 2 || updatedRoom.players.length < 2 || updatedRoom.phase === 'paused') {
+    if (
+      readyPlayers(updatedRoom) < requiredPlayerCount(updatedRoom) ||
+      updatedRoom.players.length < requiredPlayerCount(updatedRoom) ||
+      updatedRoom.phase === 'paused'
+    ) {
       this.rooms.set(updatedRoom.roomId, updatedRoom)
       return {
         room: updatedRoom,
@@ -291,7 +304,7 @@ export class RoomManager {
       ? room.requestedNextDayPlayerIds
       : [...room.requestedNextDayPlayerIds, input.playerId]
 
-    if (requestedNextDayPlayerIds.length < 2) {
+    if (requestedNextDayPlayerIds.length < requiredPlayerCount(room)) {
       const updatedRoom = {
         ...room,
         requestedNextDayPlayerIds,

@@ -26,6 +26,8 @@ function createPlanningRoom(seed = 42): RoomState {
       hostPlayerName: 'Alex',
       hostSessionId: 'session-host',
       hostFactionId: 'sun-guild',
+      gameMode: 'multiplayer',
+      targetPlayerCount: 2,
       seed,
     }),
     {
@@ -35,6 +37,19 @@ function createPlanningRoom(seed = 42): RoomState {
       factionId: 'market-tide',
     },
   )
+}
+
+function createSingleplayerPlanningRoom(seed = 42): RoomState {
+  return createRoom({
+    roomId: 'SOLO-42',
+    hostPlayerId: 'player-host',
+    hostPlayerName: 'Alex',
+    hostSessionId: 'session-host',
+    hostFactionId: 'sun-guild',
+    gameMode: 'singleplayer',
+    targetPlayerCount: 1,
+    seed,
+  })
 }
 
 describe('multiplayer engine', () => {
@@ -49,6 +64,14 @@ describe('multiplayer engine', () => {
     expect(room.players[0].reputation).toBe(50)
     expect(room.players[0].faction.id).toBe('sun-guild')
     expect(room.players[1].faction.id).toBe('market-tide')
+  })
+
+  it('creates a planning singleplayer room immediately when the target count is one', () => {
+    const room = createSingleplayerPlanningRoom(7)
+
+    expect(room.phase).toBe('planning')
+    expect(room.players).toHaveLength(1)
+    expect(room.maxPlayers).toBe(1)
   })
 
   it('keeps plan updates isolated to the targeted player', () => {
@@ -126,6 +149,13 @@ describe('multiplayer engine', () => {
   it('derives weather customer pools from the balance config', () => {
     expect(customerCountForWeather('hot')).toBe(50)
     expect(customerCountForWeather('raining')).toBe(15)
+  })
+
+  it('scales customer count from the two-player baseline using the configured player count', () => {
+    expect(customerCountForWeather('hot', 1)).toBe(25)
+    expect(customerCountForWeather('sunny', 1)).toBe(15)
+    expect(customerCountForWeather('raining', 1)).toBe(8)
+    expect(customerCountForWeather('hot', 2)).toBe(50)
   })
 
   it('prefers the cheaper stand when recipe and reputation match', () => {
@@ -264,6 +294,17 @@ describe('multiplayer engine', () => {
     expect(first.players.map((player) => player.dailyResults)).toEqual(
       second.players.map((player) => player.dailyResults),
     )
+  })
+
+  it('allows a solo room to start simulation when the only player is ready', () => {
+    const readySoloRoom = setPlayerReady(createSingleplayerPlanningRoom(123), 'player-host', true)
+
+    expect(roomCanStartSimulation(readySoloRoom)).toBe(true)
+
+    const simulated = startSimulation(readySoloRoom)
+
+    expect(simulated.phase).toBe('simulating')
+    expect(simulated.simulation?.events.length).toBeGreaterThan(0)
   })
 
   it('lets a slight stand advantage win more often without taking every customer', () => {
@@ -549,6 +590,8 @@ describe('persistent customer profiles', () => {
       hostPlayerId: 'player-host',
       hostPlayerName: 'Alex',
       hostSessionId: 'session-host',
+      gameMode: 'multiplayer',
+      targetPlayerCount: 2,
       seed: 17,
     }, persistentBalance)
     const second = createRoom({
@@ -556,6 +599,8 @@ describe('persistent customer profiles', () => {
       hostPlayerId: 'player-host',
       hostPlayerName: 'Alex',
       hostSessionId: 'session-host',
+      gameMode: 'multiplayer',
+      targetPlayerCount: 2,
       seed: 17,
     }, persistentBalance)
     const third = createRoom({
@@ -563,6 +608,8 @@ describe('persistent customer profiles', () => {
       hostPlayerId: 'player-host',
       hostPlayerName: 'Alex',
       hostSessionId: 'session-host',
+      gameMode: 'multiplayer',
+      targetPlayerCount: 2,
       seed: 18,
     }, persistentBalance)
     const expectedRosterSize = Math.max(

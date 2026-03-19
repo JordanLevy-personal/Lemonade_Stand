@@ -39,6 +39,8 @@ function createRoom(overrides: Partial<RoomState> = {}): RoomState {
   return {
     roomId: 'ROOM-42',
     hostPlayerId: 'player-host',
+    gameMode: 'multiplayer',
+    targetPlayerCount: 2,
     day: 2,
     weather: 'hot',
     phase: 'planning',
@@ -130,6 +132,28 @@ function createHostRoom(
   }
 }
 
+function createSoloRoom(
+  playerOverrides: Partial<RoomState['players'][number]> = {},
+  roomOverrides: Partial<RoomState> = {},
+): RoomState {
+  const room = createRoom({
+    gameMode: 'singleplayer',
+    targetPlayerCount: 1,
+    players: [createRoom().players[0]],
+    ...roomOverrides,
+  })
+
+  return {
+    ...room,
+    players: [
+      {
+        ...room.players[0],
+        ...playerOverrides,
+      },
+    ],
+  }
+}
+
 function getPanelByText(pattern: RegExp): HTMLElement {
   const source = screen.getAllByText(pattern)[0]
   const panel = source.closest('.panel')
@@ -163,6 +187,7 @@ describe('App', () => {
     render(<App />)
 
     expect(screen.getByRole('button', { name: /host room/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /play single-player/i })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /join room/i })).toBeInTheDocument()
     expect(screen.queryByText(/lan/i)).not.toBeInTheDocument()
 
@@ -176,6 +201,29 @@ describe('App', () => {
       expect.objectContaining({
         type: 'create_room',
         name: 'Alex',
+        gameMode: 'multiplayer',
+        targetPlayerCount: 2,
+        faction: SUN_FACTION,
+        analyticsPlayerId: expect.any(String),
+      }),
+    )
+  })
+
+  it('creates a singleplayer room from the lobby', () => {
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /play single-player/i }))
+
+    expect(openRoomConnectionMock).toHaveBeenCalledTimes(1)
+    expect(sendMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'create_room',
+        name: 'Alex',
+        gameMode: 'singleplayer',
+        targetPlayerCount: 1,
         faction: SUN_FACTION,
         analyticsPlayerId: expect.any(String),
       }),
@@ -251,6 +299,30 @@ describe('App', () => {
         price: 1.75,
       },
     })
+  })
+
+  it('shows solo planning copy without waiting on another player', () => {
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /play single-player/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'room_state',
+      room: createSoloRoom({ hasSubmittedPlan: false }, { phase: 'planning' }),
+    })
+
+    expect(screen.getByText(/lock in your plan to start the day/i)).toBeInTheDocument()
+    expect(screen.getByText(/you are the only stand today/i)).toBeInTheDocument()
+    expect(screen.queryByText(/both players are ready/i)).not.toBeInTheDocument()
   })
 
   it('blocks zero lemons and sugar in submitted recipes while allowing zero ice', () => {
@@ -540,6 +612,43 @@ describe('App', () => {
     expect(screen.getAllByText(/blair/i).length).toBeGreaterThan(0)
   })
 
+  it('shows only one stand during a singleplayer simulation', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-03-16T12:00:02.000Z'))
+
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /play single-player/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'simulation_started',
+      simulationStartAt: Date.parse('2026-03-16T12:00:00.000Z'),
+      room: createSoloRoom(
+        {},
+        {
+          phase: 'simulating',
+          simulation: {
+            durationMs: 6000,
+            simulationStartAt: Date.parse('2026-03-16T12:00:00.000Z'),
+            customerEvents: [],
+          },
+        },
+      ),
+    })
+
+    expect(screen.getByAltText(/alex stand/i)).toBeInTheDocument()
+    expect(screen.queryByText(/blair/i)).not.toBeInTheDocument()
+  })
+
   it('depletes the current player inventory as simulation sales resolve', () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-03-16T12:00:00.000Z'))
@@ -678,6 +787,43 @@ describe('App', () => {
       roomId: 'ROOM-42',
       playerId: 'player-host',
     })
+  })
+
+  it('uses next day copy for singleplayer results', () => {
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /play single-player/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'room_state',
+      room: createSoloRoom(
+        {
+          dailyResults: {
+            cupsSold: 12,
+            revenue: 18,
+            satisfaction: 0.79,
+            reputationDelta: 4,
+            customersWon: 12,
+            customersSkipped: 3,
+            customersSoldOut: 1,
+          },
+        },
+        { phase: 'results' },
+      ),
+    })
+
+    expect(screen.getByRole('button', { name: /^next day$/i })).toBeInTheDocument()
+    expect(screen.getByText(/start the next day when you are ready/i)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /request next day/i })).not.toBeInTheDocument()
   })
 
   it('offers reconnect using the stored room session', () => {
