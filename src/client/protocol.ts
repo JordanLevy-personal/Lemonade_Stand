@@ -6,6 +6,7 @@ import type {
 
 export type RoomPhase = 'lobby' | 'planning' | 'simulating' | 'results' | 'paused'
 export type GameMode = 'singleplayer' | 'multiplayer'
+export type RunLengthDays = 14 | 30
 
 export type Weather = 'sunny' | 'hot' | 'cloudy' | 'raining'
 
@@ -44,9 +45,11 @@ export interface PlayerDayHistoryEntry {
   revenue: number
   purchaseCost: number
   profit: number
+  endingMoney?: number
   reputationAfter: number
   cupsSold: number
   satisfaction: number
+  recipeSnapshot?: Recipe
 }
 
 export interface FactionDefinition {
@@ -101,12 +104,20 @@ export interface RoomSimulation {
   simulationStartAt: number
 }
 
+export interface RoomFinalOutcome {
+  winnerPlayerIds: string[]
+  decidedBy: 'money' | 'reputation' | 'draw'
+}
+
 export interface RoomState {
   roomId: string
   hostPlayerId: string
   gameMode: GameMode
   targetPlayerCount: number
   day: number
+  runLengthDays: RunLengthDays
+  isGameComplete: boolean
+  finalOutcome: RoomFinalOutcome | null
   weather: Weather | null
   phase: RoomPhase
   pausedFromPhase: Exclude<RoomPhase, 'paused'> | null
@@ -150,6 +161,7 @@ export interface CreateRoomMessage {
   name: string
   gameMode: GameMode
   targetPlayerCount: number
+  runLengthDays: RunLengthDays
   faction: FactionDefinition
   analyticsPlayerId: string
 }

@@ -95,9 +95,11 @@ function toGameRoom(room: RoomState): GameRoomState {
         revenue: entry.revenue,
         purchaseCost: entry.purchaseCost,
         profit: entry.profit,
+        endingMoney: entry.endingMoney,
         reputationAfter: entry.reputationAfter,
         cupsSold: entry.cupsSold,
         satisfaction: entry.satisfaction,
+        recipeSnapshot: entry.recipeSnapshot,
       })),
     })),
     marketBasePrices: room.marketBasePrices,
@@ -145,6 +147,9 @@ function toServerRoom(gameRoom: GameRoomState): RoomState {
     gameMode: gameRoom.gameMode,
     targetPlayerCount: gameRoom.maxPlayers,
     day: gameRoom.day,
+    runLengthDays: 14,
+    isGameComplete: false,
+    finalOutcome: null,
     weather: gameRoom.weather ?? 'sunny',
     phase: gameRoom.phase,
     players: gameRoom.players.map((player) => ({
@@ -168,9 +173,11 @@ function toServerRoom(gameRoom: GameRoomState): RoomState {
         revenue: entry.revenue,
         purchaseCost: entry.purchaseCost,
         profit: entry.profit,
+        endingMoney: entry.endingMoney,
         reputationAfter: entry.reputationAfter,
         cupsSold: entry.cupsSold,
         satisfaction: entry.satisfaction,
+        recipeSnapshot: entry.recipeSnapshot,
       })),
       hasSubmittedPlan: player.isReady,
       connectionStatus: player.connectionStatus,
@@ -273,6 +280,9 @@ export function createDefaultRoomGameHooks(): RoomGameHooks {
       return {
         room: {
           ...nextRoom,
+          runLengthDays: room.runLengthDays,
+          isGameComplete: false,
+          finalOutcome: null,
           phase: 'simulating',
           simulation:
             nextRoom.simulation === null
@@ -295,6 +305,9 @@ export function createDefaultRoomGameHooks(): RoomGameHooks {
 
       return {
         ...toServerRoom(nextDay),
+        runLengthDays: room.runLengthDays,
+        isGameComplete: false,
+        finalOutcome: null,
         phase: 'planning',
         pausedFromPhase: null,
         requestedNextDayPlayerIds: [],

@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type Server as HttpServer } from 'node:http'
 
+import { defaultBalanceConfig } from '../src/game/balance'
 import type { SimulationTelemetry } from '../src/game/types'
 import type { ClientMessage, PlayerSession, RoomState, ServerMessage } from './contracts'
 import { createDefaultRoomGameHooks } from './default-game-hooks'
@@ -326,6 +327,7 @@ export async function createLanServer(
             name: message.name,
             gameMode: message.gameMode,
             targetPlayerCount: message.targetPlayerCount,
+            runLengthDays: message.runLengthDays,
             faction: message.faction,
             analyticsPlayerId: message.analyticsPlayerId,
           })
@@ -337,6 +339,8 @@ export async function createLanServer(
               rngSeed: room.rngSeed ?? 0,
               gameMode: room.gameMode,
               playerCount: room.targetPlayerCount,
+              runLengthDays: room.runLengthDays,
+              customerTastePreferenceWeight: defaultBalanceConfig.customerTastePreferenceWeight,
             })
             telemetryRepository.insertCustomerProfiles({
               gameId: roomId,

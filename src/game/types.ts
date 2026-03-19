@@ -7,7 +7,12 @@ export type ConnectionStatus = 'connected' | 'disconnected'
 export type RunUpgradeId = 'recipe-feedback-hints'
 
 export type CustomerOutcome = 'buy' | 'skip' | 'soldOut'
-export type CustomerOutcomeReason = 'purchased' | 'all_prices_above_willingness' | 'selected_stand_sold_out'
+export type CustomerOutcomeReason =
+  | 'purchased'
+  | 'purchased_after_sold_out_reroute'
+  | 'all_prices_above_willingness'
+  | 'selected_stand_sold_out'
+  | 'reroute_exhausted_after_sold_out'
 export type CustomerOfferResult = 'selected' | 'not_selected' | 'price_rejected' | 'selected_but_sold_out'
 
 export interface Inventory {
@@ -52,9 +57,11 @@ export interface PlayerDayHistoryEntry {
   revenue: number
   purchaseCost: number
   profit: number
+  endingMoney: number
   reputationAfter: number
   cupsSold: number
   satisfaction: number
+  recipeSnapshot: Recipe
 }
 
 export interface FactionDefinition {
@@ -144,6 +151,7 @@ export interface TelemetryCustomerEvent {
   salePrice: number
   satisfaction: number
   outcomeReason: CustomerOutcomeReason
+  rerouteCount: number
 }
 
 export interface TelemetryCustomerOfferScore {
@@ -157,6 +165,7 @@ export interface TelemetryCustomerOfferScore {
   historyBonus: number
   totalScore: number
   canFulfill: boolean
+  selectionRound: number
   offerResult: CustomerOfferResult
 }
 
@@ -206,6 +215,7 @@ export interface BalanceConfig {
   defaultRecipe: Recipe
   defaultPrice: number
   recipeFeedbackHintUpgradeCost: number
+  customerTastePreferenceWeight: number
   weatherProfiles: Record<Weather, WeatherProfile>
   marketPriceBands: Record<keyof Inventory, IngredientPriceBand>
   maxPlayers: number

@@ -59,6 +59,8 @@ describe('SqliteTelemetryRepository', () => {
       rngSeed: 1234,
       gameMode: 'singleplayer',
       playerCount: 1,
+      runLengthDays: 14,
+      customerTastePreferenceWeight: 0.2,
     })
     repository.upsertPlayerDayPlan({
       gameId: 'ROOM01',
@@ -158,7 +160,7 @@ describe('SqliteTelemetryRepository', () => {
     )
     const gameRows = readTable(
       databasePath,
-      'select game_id, room_id, rng_seed, game_mode, player_count from games',
+      'select game_id, room_id, rng_seed, game_mode, player_count, run_length_days, customer_taste_preference_weight from games',
     )
 
     expect(gameRows).toEqual([
@@ -168,6 +170,8 @@ describe('SqliteTelemetryRepository', () => {
         rng_seed: 1234,
         game_mode: 'singleplayer',
         player_count: 1,
+        run_length_days: 14,
+        customer_taste_preference_weight: 0.2,
       },
     ])
     expect(playerDayRows).toEqual([
@@ -197,6 +201,8 @@ describe('SqliteTelemetryRepository', () => {
       rngSeed: 999,
       gameMode: 'multiplayer',
       playerCount: 2,
+      runLengthDays: 30,
+      customerTastePreferenceWeight: 0.2,
     })
     repository.insertCustomerProfiles({
       gameId: 'ROOM02',
@@ -241,7 +247,8 @@ describe('SqliteTelemetryRepository', () => {
           outcome: 'buy',
           salePrice: 1.4,
           satisfaction: 0.81,
-          outcomeReason: 'purchased',
+          outcomeReason: 'purchased_after_sold_out_reroute',
+          rerouteCount: 1,
         },
       ],
     })
@@ -249,6 +256,20 @@ describe('SqliteTelemetryRepository', () => {
       gameId: 'ROOM02',
       dayNumber: 1,
       scores: [
+        {
+          customerEventId: 'event-1',
+          customerId: 'customer-1',
+          playerId: 'guest-1',
+          offeredPrice: 1.95,
+          reputation: 50,
+          preferredRecipeFit: 0.9,
+          priceScore: 0.26,
+          historyBonus: 0,
+          totalScore: 0.531,
+          canFulfill: false,
+          selectionRound: 1,
+          offerResult: 'selected_but_sold_out',
+        },
         {
           customerEventId: 'event-1',
           customerId: 'customer-1',
@@ -260,20 +281,8 @@ describe('SqliteTelemetryRepository', () => {
           historyBonus: 0,
           totalScore: 0.531,
           canFulfill: true,
+          selectionRound: 2,
           offerResult: 'selected',
-        },
-        {
-          customerEventId: 'event-1',
-          customerId: 'customer-1',
-          playerId: 'guest-1',
-          offeredPrice: 1.95,
-          reputation: 50,
-          preferredRecipeFit: 0.9,
-          priceScore: 0,
-          historyBonus: 0,
-          totalScore: 0,
-          canFulfill: true,
-          offerResult: 'price_rejected',
         },
       ],
     })
@@ -284,11 +293,11 @@ describe('SqliteTelemetryRepository', () => {
     )
     const eventRows = readTable(
       databasePath,
-      'select customer_event_id, outcome, outcome_reason, preferred_recipe_lemons from customer_events',
+      'select customer_event_id, outcome, outcome_reason, reroute_count, preferred_recipe_lemons from customer_events',
     )
     const scoreRows = readTable(
       databasePath,
-      'select player_id, offer_result, total_score from customer_offer_scores order by player_id',
+      'select player_id, selection_round, offer_result, total_score from customer_offer_scores order by selection_round, player_id',
     )
 
     expect(profileRows).toEqual([
@@ -303,18 +312,21 @@ describe('SqliteTelemetryRepository', () => {
       {
         customer_event_id: 'event-1',
         outcome: 'buy',
-        outcome_reason: 'purchased',
+        outcome_reason: 'purchased_after_sold_out_reroute',
+        reroute_count: 1,
         preferred_recipe_lemons: 3,
       },
     ])
     expect(scoreRows).toEqual([
       {
         player_id: 'guest-1',
-        offer_result: 'price_rejected',
-        total_score: 0,
+        selection_round: 1,
+        offer_result: 'selected_but_sold_out',
+        total_score: 0.531,
       },
       {
         player_id: 'host-1',
+        selection_round: 2,
         offer_result: 'selected',
         total_score: 0.531,
       },
