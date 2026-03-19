@@ -40,11 +40,13 @@ describe('default game hooks', () => {
       playerId: 'host-1',
       name: 'Host',
       faction: HOST_FACTION,
+      analyticsPlayerId: 'analytics-host',
     })
     manager.joinRoom({
       roomId: 'ROOM01',
       name: 'Guest',
       faction: GUEST_FACTION,
+      analyticsPlayerId: 'analytics-guest',
     })
 
     manager.submitPlan({

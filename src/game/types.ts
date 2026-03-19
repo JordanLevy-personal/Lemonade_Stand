@@ -5,6 +5,8 @@ export type Weather = 'sunny' | 'hot' | 'cloudy' | 'raining'
 export type ConnectionStatus = 'connected' | 'disconnected'
 
 export type CustomerOutcome = 'buy' | 'skip' | 'soldOut'
+export type CustomerOutcomeReason = 'purchased' | 'all_prices_above_willingness' | 'selected_stand_sold_out'
+export type CustomerOfferResult = 'selected' | 'not_selected' | 'price_rejected' | 'selected_but_sold_out'
 
 export interface Inventory {
   lemons: number
@@ -93,6 +95,43 @@ export interface CustomerProfile {
   id: string
   tasteOffsets: CustomerTasteOffsets
   standHistory: Record<string, CustomerStandHistory>
+}
+
+export interface TelemetryCustomerProfile {
+  customerId: string
+  tasteOffsets: CustomerTasteOffsets
+}
+
+export interface TelemetryCustomerEvent {
+  customerEventId: string
+  customerId: string
+  willingnessToPay: number
+  preferredRecipe: Recipe
+  chosenPlayerId: string | null
+  outcome: CustomerOutcome
+  salePrice: number
+  satisfaction: number
+  outcomeReason: CustomerOutcomeReason
+}
+
+export interface TelemetryCustomerOfferScore {
+  customerEventId: string
+  customerId: string
+  playerId: string
+  offeredPrice: number
+  reputation: number
+  preferredRecipeFit: number
+  priceScore: number
+  historyBonus: number
+  totalScore: number
+  canFulfill: boolean
+  offerResult: CustomerOfferResult
+}
+
+export interface SimulationTelemetry {
+  customerProfiles: TelemetryCustomerProfile[]
+  customerEvents: TelemetryCustomerEvent[]
+  customerOfferScores: TelemetryCustomerOfferScore[]
 }
 
 export interface RngState {

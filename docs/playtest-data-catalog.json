@@ -1,0 +1,354 @@
+{
+  "version": 1,
+  "updatedAt": "2026-03-18",
+  "purpose": "Canonical catalog of raw playtest telemetry logged for multiplayer balancing and post-run analysis.",
+  "reviewPolicy": {
+    "requiredForFeatureTypes": [
+      "gameplay",
+      "ui",
+      "server"
+    ],
+    "defaultDeveloperQuestion": "Do you expect to analyze or balance this feature later, and if so what raw inputs would you want to inspect?",
+    "outcomes": [
+      "add telemetry",
+      "no change",
+      "defer"
+    ]
+  },
+  "entities": [
+    {
+      "name": "games",
+      "source": "server room lifecycle",
+      "rationale": "Groups all player-day and customer telemetry under a single authoritative game id.",
+      "implemented": true,
+      "fields": [
+        {
+          "name": "gameId",
+          "type": "string",
+          "source": "roomId",
+          "implemented": true,
+          "rationale": "V1 game identifier shared across all telemetry rows."
+        },
+        {
+          "name": "roomId",
+          "type": "string",
+          "source": "room manager create_room",
+          "implemented": true,
+          "rationale": "Retains the public room code that produced the run."
+        },
+        {
+          "name": "rngSeed",
+          "type": "integer",
+          "source": "server room seed",
+          "implemented": true,
+          "rationale": "Lets offline analysis correlate balancing outcomes with deterministic generation."
+        },
+        {
+          "name": "createdAt",
+          "type": "iso-datetime",
+          "source": "telemetry repository",
+          "implemented": true,
+          "rationale": "Marks when the run was first recorded."
+        },
+        {
+          "name": "lastActivityAt",
+          "type": "iso-datetime",
+          "source": "telemetry repository",
+          "implemented": true,
+          "rationale": "Marks the latest plan or next-day activity for the run."
+        }
+      ]
+    },
+    {
+      "name": "playerDayRecords",
+      "source": "authoritative room snapshots and submitted plans",
+      "rationale": "Captures raw per-day player inputs and resolved outcomes for balancing decisions.",
+      "implemented": true,
+      "fields": [
+        {
+          "name": "analyticsPlayerId",
+          "type": "string",
+          "source": "browser localStorage identity",
+          "implemented": true,
+          "rationale": "Links the same anonymous browser across games without exposing player names."
+        },
+        {
+          "name": "playerId",
+          "type": "string",
+          "source": "room player state",
+          "implemented": true,
+          "rationale": "Distinguishes each room-scoped participant."
+        },
+        {
+          "name": "dayNumber",
+          "type": "integer",
+          "source": "room day",
+          "implemented": true,
+          "rationale": "Groups planning and result records by day."
+        },
+        {
+          "name": "factionId",
+          "type": "string",
+          "source": "player faction",
+          "implemented": true,
+          "rationale": "Supports balance analysis across stand identities."
+        },
+        {
+          "name": "weather",
+          "type": "enum",
+          "source": "room day state",
+          "implemented": true,
+          "rationale": "Explains market conditions for submitted plans."
+        },
+        {
+          "name": "marketBasePrices",
+          "type": "inventory-price-object",
+          "source": "room day state",
+          "implemented": true,
+          "rationale": "Captures shared ingredient prices that influenced planning."
+        },
+        {
+          "name": "inventoryBeforePlanning",
+          "type": "inventory-object",
+          "source": "pre-submit player snapshot",
+          "implemented": true,
+          "rationale": "Shows the stock available before the new shopping list."
+        },
+        {
+          "name": "moneyBeforePlanning",
+          "type": "number",
+          "source": "pre-submit player snapshot",
+          "implemented": true,
+          "rationale": "Captures purchasing power before the submitted plan."
+        },
+        {
+          "name": "reputationBeforePlanning",
+          "type": "integer",
+          "source": "pre-submit player snapshot",
+          "implemented": true,
+          "rationale": "Captures reputation influence before the submitted plan."
+        },
+        {
+          "name": "purchases",
+          "type": "inventory-object",
+          "source": "submitted plan",
+          "implemented": true,
+          "rationale": "Stores the exact staged shopping basket."
+        },
+        {
+          "name": "recipe",
+          "type": "recipe-object",
+          "source": "submitted plan",
+          "implemented": true,
+          "rationale": "Stores the recipe the player chose for the day."
+        },
+        {
+          "name": "price",
+          "type": "number",
+          "source": "submitted plan",
+          "implemented": true,
+          "rationale": "Stores the selling price the player submitted."
+        },
+        {
+          "name": "inventoryAfterResults",
+          "type": "inventory-object",
+          "source": "post-simulation player state",
+          "implemented": true,
+          "rationale": "Shows leftover stock after the day resolves."
+        },
+        {
+          "name": "moneyAfterResults",
+          "type": "number",
+          "source": "post-simulation player state",
+          "implemented": true,
+          "rationale": "Shows ending cash after purchases and sales."
+        },
+        {
+          "name": "reputationAfterResults",
+          "type": "integer",
+          "source": "post-simulation player state",
+          "implemented": true,
+          "rationale": "Shows ending reputation after the day resolves."
+        },
+        {
+          "name": "dailyResults",
+          "type": "results-object",
+          "source": "post-simulation player results",
+          "implemented": true,
+          "rationale": "Stores cups sold, revenue, satisfaction, reputation delta, and customer outcome counts."
+        }
+      ]
+    },
+    {
+      "name": "customerProfiles",
+      "source": "seeded customer roster at game start",
+      "rationale": "Captures stable taste offsets for each persistent customer in a run.",
+      "implemented": true,
+      "fields": [
+        {
+          "name": "customerId",
+          "type": "string",
+          "source": "seeded roster",
+          "implemented": true,
+          "rationale": "Stable game-scoped customer identifier."
+        },
+        {
+          "name": "tasteOffsets",
+          "type": "taste-offset-object",
+          "source": "seeded roster",
+          "implemented": true,
+          "rationale": "Stores lemons, sugar, and ice preference offsets for balancing analysis."
+        }
+      ]
+    },
+    {
+      "name": "customerEvents",
+      "source": "authoritative day simulation",
+      "rationale": "Captures the final per-customer day outcome and why it happened.",
+      "implemented": true,
+      "fields": [
+        {
+          "name": "customerEventId",
+          "type": "string",
+          "source": "simulation event",
+          "implemented": true,
+          "rationale": "Stable per-day event identifier."
+        },
+        {
+          "name": "customerId",
+          "type": "string",
+          "source": "simulation event",
+          "implemented": true,
+          "rationale": "Links the event back to the persistent customer profile."
+        },
+        {
+          "name": "willingnessToPay",
+          "type": "number",
+          "source": "simulation roll",
+          "implemented": true,
+          "rationale": "Supports pricing analysis and buy/skip explanation."
+        },
+        {
+          "name": "preferredRecipe",
+          "type": "recipe-object",
+          "source": "weather-adjusted taste preference",
+          "implemented": true,
+          "rationale": "Captures what the customer wanted that day."
+        },
+        {
+          "name": "chosenPlayerId",
+          "type": "string|null",
+          "source": "winner selection",
+          "implemented": true,
+          "rationale": "Shows which stand the customer targeted, if any."
+        },
+        {
+          "name": "outcome",
+          "type": "enum",
+          "source": "simulation event",
+          "implemented": true,
+          "rationale": "Stores buy, skip, or soldOut."
+        },
+        {
+          "name": "outcomeReason",
+          "type": "enum",
+          "source": "telemetry reason mapping",
+          "implemented": true,
+          "rationale": "Stores purchased, all_prices_above_willingness, or selected_stand_sold_out."
+        },
+        {
+          "name": "salePrice",
+          "type": "number",
+          "source": "simulation event",
+          "implemented": true,
+          "rationale": "Captures the actual charged price when a purchase succeeds."
+        },
+        {
+          "name": "satisfaction",
+          "type": "number",
+          "source": "simulation event",
+          "implemented": true,
+          "rationale": "Captures the resolved post-purchase satisfaction score."
+        }
+      ]
+    },
+    {
+      "name": "customerOfferScores",
+      "source": "telemetry scoring breakdown during winner selection",
+      "rationale": "Captures the raw per-player offer inputs that explain why a customer chose, rejected, or lost a stand.",
+      "implemented": true,
+      "fields": [
+        {
+          "name": "customerEventId",
+          "type": "string",
+          "source": "simulation event",
+          "implemented": true,
+          "rationale": "Associates each offer row with one customer event."
+        },
+        {
+          "name": "playerId",
+          "type": "string",
+          "source": "player offer",
+          "implemented": true,
+          "rationale": "Identifies the stand being scored."
+        },
+        {
+          "name": "offeredPrice",
+          "type": "number",
+          "source": "player daily plan",
+          "implemented": true,
+          "rationale": "Supports pricing comparisons across stands."
+        },
+        {
+          "name": "reputation",
+          "type": "integer",
+          "source": "player snapshot",
+          "implemented": true,
+          "rationale": "Shows the reputation value used during scoring."
+        },
+        {
+          "name": "preferredRecipeFit",
+          "type": "number",
+          "source": "recipe-fit calculation",
+          "implemented": true,
+          "rationale": "Shows how well the stand recipe matched the customer preference."
+        },
+        {
+          "name": "priceScore",
+          "type": "number",
+          "source": "price ceiling calculation",
+          "implemented": true,
+          "rationale": "Shows whether the customer would even consider the offered price."
+        },
+        {
+          "name": "historyBonus",
+          "type": "number",
+          "source": "customer stand history",
+          "implemented": true,
+          "rationale": "Shows repeat-customer pull from prior satisfaction and recency."
+        },
+        {
+          "name": "totalScore",
+          "type": "number",
+          "source": "winner selection calculation",
+          "implemented": true,
+          "rationale": "Captures the final weighted score used for stand selection."
+        },
+        {
+          "name": "canFulfill",
+          "type": "boolean",
+          "source": "inventory check at resolution",
+          "implemented": true,
+          "rationale": "Shows whether the stand had enough stock to serve the customer."
+        },
+        {
+          "name": "offerResult",
+          "type": "enum",
+          "source": "telemetry classification",
+          "implemented": true,
+          "rationale": "Stores selected, not_selected, price_rejected, or selected_but_sold_out."
+        }
+      ]
+    }
+  ]
+}

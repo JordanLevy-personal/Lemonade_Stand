@@ -35,6 +35,9 @@ export interface DailyResults {
   revenue: number
   satisfaction: number
   reputationDelta: number
+  customersWon: number
+  customersSkipped: number
+  customersSoldOut: number
 }
 
 export interface MarketBasePrices {
@@ -93,6 +96,7 @@ export interface CreateRoomMessage {
   type: 'create_room'
   name: string
   faction: FactionSelection
+  analyticsPlayerId: string
 }
 
 export interface JoinRoomMessage {
@@ -100,6 +104,7 @@ export interface JoinRoomMessage {
   roomId: string
   name: string
   faction: FactionSelection
+  analyticsPlayerId: string
   playerId?: string
 }
 

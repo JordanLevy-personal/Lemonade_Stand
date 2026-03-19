@@ -1,6 +1,10 @@
 // @vitest-environment node
 
-import WebSocket from 'ws'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
+import WebSocket, { type RawData } from 'ws'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { createLanServer, type LanServerLogger } from './socket-server'
@@ -26,9 +30,44 @@ function waitForPing(socket: WebSocket): Promise<void> {
   })
 }
 
+function waitForMessageCount(socket: WebSocket, count: number): Promise<string[]> {
+  return new Promise((resolve, reject) => {
+    const messages: string[] = []
+
+    const onMessage = (payload: RawData) => {
+      messages.push(String(payload))
+
+      if (messages.length >= count) {
+        socket.off('message', onMessage)
+        socket.off('error', onError)
+        resolve(messages)
+      }
+    }
+    const onError = (error: Error) => {
+      socket.off('message', onMessage)
+      socket.off('error', onError)
+      reject(error)
+    }
+
+    socket.on('message', onMessage)
+    socket.on('error', onError)
+  })
+}
+
+function readAll(databasePath: string, query: string): Record<string, unknown>[] {
+  const database = new DatabaseSync(databasePath)
+
+  try {
+    return database.prepare(query).all() as Record<string, unknown>[]
+  } finally {
+    database.close()
+  }
+}
+
 describe('createLanServer', () => {
   const sockets: WebSocket[] = []
   const servers: Array<{ close: () => Promise<void> }> = []
+  const tempDirectories: string[] = []
 
   afterEach(async () => {
     sockets.forEach((socket) => socket.close())
@@ -36,6 +75,10 @@ describe('createLanServer', () => {
 
     while (servers.length > 0) {
       await servers.pop()?.close()
+    }
+
+    while (tempDirectories.length > 0) {
+      rmSync(tempDirectories.pop()!, { recursive: true, force: true })
     }
   })
 
@@ -64,6 +107,7 @@ describe('createLanServer', () => {
           name: 'Sun Guild',
           accentColor: '#f3b63f',
         },
+        analyticsPlayerId: 'analytics-host',
       }),
     )
 
@@ -122,5 +166,136 @@ describe('createLanServer', () => {
     await waitForOpen(socket)
 
     await expect(waitForPing(socket)).resolves.toBeUndefined()
+  })
+
+  it('persists game, player-day, customer profile, and customer event telemetry after simulation starts', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'socket-server-telemetry-'))
+    const databasePath = join(directory, 'playtest.sqlite')
+    tempDirectories.push(directory)
+
+    const server = await createLanServer({
+      port: 0,
+      telemetryDatabasePath: databasePath,
+      now: () => 12_000,
+    })
+    servers.push(server)
+
+    const hostSocket = new WebSocket(`ws://127.0.0.1:${server.port}`)
+    const guestSocket = new WebSocket(`ws://127.0.0.1:${server.port}`)
+    sockets.push(hostSocket, guestSocket)
+    await Promise.all([waitForOpen(hostSocket), waitForOpen(guestSocket)])
+
+    hostSocket.send(
+      JSON.stringify({
+        type: 'create_room',
+        name: 'Alex',
+        faction: {
+          id: 'sun-guild',
+          name: 'Sun Guild',
+          accentColor: '#f3b63f',
+        },
+        analyticsPlayerId: 'analytics-host',
+      }),
+    )
+
+    const [hostConnectedRaw] = await waitForMessageCount(hostSocket, 1)
+    const hostConnected = JSON.parse(hostConnectedRaw) as {
+      roomId: string
+      playerId: string
+      type: string
+    }
+
+    guestSocket.send(
+      JSON.stringify({
+        type: 'join_room',
+        roomId: hostConnected.roomId,
+        name: 'Blair',
+        faction: {
+          id: 'market-tide',
+          name: 'Market Tide',
+          accentColor: '#4b8e8d',
+        },
+        analyticsPlayerId: 'analytics-guest',
+      }),
+    )
+
+    const [guestConnectedRaw] = await waitForMessageCount(guestSocket, 1)
+    const guestConnected = JSON.parse(guestConnectedRaw) as {
+      playerId: string
+      type: string
+    }
+
+    hostSocket.send(
+      JSON.stringify({
+        type: 'submit_plan',
+        roomId: hostConnected.roomId,
+        playerId: hostConnected.playerId,
+        plan: {
+          purchases: {
+            lemons: 6,
+            sugar: 6,
+            ice: 6,
+          },
+          recipe: {
+            lemons: 2,
+            sugar: 2,
+            ice: 2,
+          },
+          price: 1.2,
+        },
+      }),
+    )
+
+    guestSocket.send(
+      JSON.stringify({
+        type: 'submit_plan',
+        roomId: hostConnected.roomId,
+        playerId: guestConnected.playerId,
+        plan: {
+          purchases: {
+            lemons: 6,
+            sugar: 6,
+            ice: 6,
+          },
+          recipe: {
+            lemons: 2,
+            sugar: 2,
+            ice: 2,
+          },
+          price: 1.4,
+        },
+      }),
+    )
+
+    await new Promise((resolve) => setTimeout(resolve, 50))
+
+    const games = readAll(databasePath, 'select game_id from games')
+    const playerDays = readAll(
+      databasePath,
+      'select analytics_player_id, player_id, day_number from player_day_records order by analytics_player_id',
+    )
+    const customerProfiles = readAll(databasePath, 'select count(*) as count from customer_profiles')
+    const customerEvents = readAll(databasePath, 'select count(*) as count from customer_events')
+    const customerOfferScores = readAll(databasePath, 'select count(*) as count from customer_offer_scores')
+
+    expect(games).toEqual([{ game_id: hostConnected.roomId }])
+    expect(playerDays).toHaveLength(2)
+    expect(playerDays).toEqual(
+      expect.arrayContaining([
+        {
+          analytics_player_id: 'analytics-host',
+          player_id: hostConnected.playerId,
+          day_number: 1,
+        },
+        {
+          analytics_player_id: 'analytics-guest',
+          player_id: guestConnected.playerId,
+          day_number: 1,
+        },
+      ]),
+    )
+    expect(Number(customerProfiles[0]?.count ?? 0)).toBeGreaterThan(0)
+    expect(Number(customerEvents[0]?.count ?? 0)).toBeGreaterThan(0)
+    expect(Number(customerOfferScores[0]?.count ?? 0)).toBeGreaterThan(0)
   })
 })

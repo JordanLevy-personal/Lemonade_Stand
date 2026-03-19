@@ -172,11 +172,14 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('button', { name: /host room/i }))
 
     expect(openRoomConnectionMock).toHaveBeenCalledTimes(1)
-    expect(sendMock).toHaveBeenCalledWith({
-      type: 'create_room',
-      name: 'Alex',
-      faction: SUN_FACTION,
-    })
+    expect(sendMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'create_room',
+        name: 'Alex',
+        faction: SUN_FACTION,
+        analyticsPlayerId: expect.any(String),
+      }),
+    )
   })
 
   it('shows room wording in the waiting room after the host creates a room', () => {
@@ -651,12 +654,18 @@ describe('App', () => {
                   revenue: 18,
                   satisfaction: 0.79,
                   reputationDelta: 4,
+                  customersWon: 12,
+                  customersSkipped: 3,
+                  customersSoldOut: 1,
                 }
               : {
                   cupsSold: 9,
                   revenue: 13.5,
                   satisfaction: 0.68,
                   reputationDelta: 1,
+                  customersWon: 9,
+                  customersSkipped: 6,
+                  customersSoldOut: 0,
                 },
         })),
       }),
@@ -688,13 +697,16 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('button', { name: /reconnect to room-42/i }))
 
     expect(openRoomConnectionMock).toHaveBeenCalledTimes(1)
-    expect(sendMock).toHaveBeenCalledWith({
-      type: 'join_room',
-      roomId: 'ROOM-42',
-      name: 'Blair',
-      faction: MARKET_FACTION,
-      playerId: 'player-guest',
-    })
+    expect(sendMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'join_room',
+        roomId: 'ROOM-42',
+        name: 'Blair',
+        faction: MARKET_FACTION,
+        playerId: 'player-guest',
+        analyticsPlayerId: expect.any(String),
+      }),
+    )
   })
 
   it('shows websocket close diagnostics when the room connection closes unexpectedly', () => {
