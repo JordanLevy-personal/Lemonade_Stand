@@ -816,6 +816,45 @@ describe('App', () => {
     expect(screen.getByText('👍')).toBeInTheDocument()
   })
 
+  it('hides the sale amount until the purchase outcome resolves', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-03-16T12:00:00.000Z'))
+
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'simulation_started',
+      simulationStartAt: Date.parse('2026-03-16T12:00:00.000Z'),
+      room: createHostRoom({}, {
+        phase: 'simulating',
+        simulation: {
+          durationMs: 6000,
+          simulationStartAt: Date.parse('2026-03-16T12:00:00.000Z'),
+          customerEvents: [createSimulationEvent()],
+        },
+      }),
+    })
+
+    expect(screen.queryByText('+$1.50')).not.toBeInTheDocument()
+
+    act(() => {
+      vi.advanceTimersByTime(1_600)
+    })
+
+    expect(screen.getByText('+$1.50')).toBeInTheDocument()
+  })
+
   it('shows a developer-only simulation speed slider and updates playback speed', () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-03-16T12:00:00.000Z'))
@@ -860,6 +899,129 @@ describe('App', () => {
     })
 
     expect(screen.getByLabelText(/timeline: 17%/i)).toBeInTheDocument()
+  })
+
+  it('keeps rendering customers late in the timeline when events spawn near the end', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-03-16T12:00:00.000Z'))
+
+    const { container } = render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'simulation_started',
+      simulationStartAt: Date.parse('2026-03-16T12:00:00.000Z'),
+      room: createHostRoom({}, {
+        phase: 'simulating',
+        simulation: {
+          durationMs: 6000,
+          simulationStartAt: Date.parse('2026-03-16T12:00:00.000Z'),
+          customerEvents: [
+            createSimulationEvent({
+              spawnAt: 4_700,
+              outcomeAt: 5_300,
+              exitAt: 5_800,
+              standStops: [
+                {
+                  playerId: 'player-host',
+                  arriveAt: 5_100,
+                  departAt: 5_300,
+                },
+              ],
+            }),
+          ],
+        },
+      }),
+    })
+
+    expect(container.querySelectorAll('.crowd-customer')).toHaveLength(0)
+
+    act(() => {
+      vi.advanceTimersByTime(5_400)
+    })
+
+    expect(screen.getByLabelText(/timeline: 90%/i)).toBeInTheDocument()
+    expect(container.querySelectorAll('.crowd-customer')).toHaveLength(1)
+  })
+
+  it('uses different sprite variants for consecutive customers so they are easier to distinguish', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-03-16T12:00:00.000Z'))
+
+    const { container } = render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'simulation_started',
+      simulationStartAt: Date.parse('2026-03-16T12:00:00.000Z'),
+      room: createHostRoom({}, {
+        phase: 'simulating',
+        simulation: {
+          durationMs: 6000,
+          simulationStartAt: Date.parse('2026-03-16T12:00:00.000Z'),
+          customerEvents: [
+            createSimulationEvent({
+              id: 'customer-0',
+              customerId: 'customer-0',
+              customerIndex: 0,
+              spawnAt: 0,
+              outcomeAt: 2_200,
+              exitAt: 3_200,
+              standStops: [
+                {
+                  playerId: 'player-host',
+                  arriveAt: 1_000,
+                  departAt: 2_200,
+                },
+              ],
+            }),
+            createSimulationEvent({
+              id: 'customer-1',
+              customerId: 'customer-1',
+              customerIndex: 1,
+              spawnAt: 0,
+              outcomeAt: 2_200,
+              exitAt: 3_200,
+              standStops: [
+                {
+                  playerId: 'player-guest',
+                  arriveAt: 1_000,
+                  departAt: 2_200,
+                },
+              ],
+            }),
+          ],
+        },
+      }),
+    })
+
+    act(() => {
+      vi.advanceTimersByTime(1_200)
+    })
+
+    const sprites = [...container.querySelectorAll('.customer-sprite')] as HTMLImageElement[]
+    expect(sprites).toHaveLength(2)
+    expect(sprites[0]?.getAttribute('src')).not.toBe(sprites[1]?.getAttribute('src'))
   })
 
   it('spreads customers across the stand width instead of stacking them at one stop point', () => {
