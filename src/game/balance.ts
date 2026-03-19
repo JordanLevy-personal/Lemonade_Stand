@@ -9,6 +9,7 @@ export const defaultBalanceConfig: BalanceConfig = {
     ice: 2,
   },
   defaultPrice: 1.5,
+  customerTastePreferenceWeight: 0.2,
   maxPlayers: 2,
   reputationMin: 0,
   reputationMax: 100,

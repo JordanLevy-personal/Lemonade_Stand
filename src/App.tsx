@@ -335,7 +335,7 @@ function formatCupDelta(current: number, projected: number): string {
 }
 
 function inventoryForSimulation(
-  player: NonNullable<ReturnType<typeof findCurrentPlayer>>,
+  player: RoomState['players'][number],
   events: CustomerEvent[],
   elapsedMs: number,
 ): Inventory {
@@ -353,6 +353,16 @@ function inventoryForSimulation(
   )
 
   return subtractRecipe(openingInventory, recipe, resolvedSales)
+}
+
+function isPlayerSoldOutDuringSimulation(
+  player: RoomState['players'][number],
+  events: CustomerEvent[],
+  elapsedMs: number,
+): boolean {
+  const liveInventory = inventoryForSimulation(player, events, elapsedMs)
+  const recipe = player.dailyPlan?.recipe ?? defaultBalanceConfig.defaultRecipe
+  return calculateSellableCups(liveInventory, recipe) < 1
 }
 
 function findCurrentPlayer(room: RoomState | null, playerId: string | null) {
@@ -916,6 +926,26 @@ function buildPlan(currentPlayer: ReturnType<typeof findCurrentPlayer>): DailyPl
     recipe: sanitizeRecipe(currentPlayer.dailyPlan.recipe),
     price: currentPlayer.dailyPlan.price,
   }
+}
+
+function shouldSyncLocalPlan(
+  previousRoom: RoomState | null,
+  nextRoom: RoomState,
+  syncedPlayer: NonNullable<ReturnType<typeof findCurrentPlayer>>,
+): boolean {
+  if (nextRoom.phase !== 'planning') {
+    return true
+  }
+
+  if (syncedPlayer.hasSubmittedPlan) {
+    return true
+  }
+
+  if (previousRoom === null) {
+    return true
+  }
+
+  return previousRoom.day !== nextRoom.day || previousRoom.phase !== nextRoom.phase
 }
 
 function MetricCard({
@@ -1543,6 +1573,9 @@ function SimulationScreen({
               key={player.id}
             >
               <p className="stand-name">{player.name}</p>
+              {isPlayerSoldOutDuringSimulation(player, simulation.customerEvents, elapsedMs) ? (
+                <span className="sold-out-sign">Sold Out</span>
+              ) : null}
               <img className="stand-sprite" src={StandSprite} alt={`${player.name} stand`} />
               <span className="stand-score">{playerSales[index] ?? 0} sales</span>
             </div>
@@ -1885,6 +1918,7 @@ function App(): JSX.Element {
   const connectionRef = useRef<RoomConnection | null>(null)
   const pendingIdentityRef = useRef<IdentityDraft | null>(null)
   const sessionRef = useRef<StoredRoomSession | null>(null)
+  const roomRef = useRef<RoomState | null>(null)
   const analyticsPlayerIdRef = useRef<string>(readOrCreateAnalyticsPlayerId())
 
   const currentPlayer = findCurrentPlayer(room, session?.playerId ?? null)
@@ -1967,10 +2001,12 @@ function App(): JSX.Element {
           }
 
           if (message.type === 'room_state') {
+            const previousRoom = roomRef.current
+            roomRef.current = message.room
             setRoom(message.room)
             const syncedPlayer = findCurrentPlayer(message.room, sessionRef.current?.playerId ?? null)
 
-            if (syncedPlayer !== null) {
+            if (syncedPlayer !== null && shouldSyncLocalPlan(previousRoom, message.room, syncedPlayer)) {
               setLocalPlan(buildPlan(syncedPlayer))
             }
             setError(null)
@@ -1987,6 +2023,7 @@ function App(): JSX.Element {
 
           if (message.type === 'simulation_started') {
             const simulationMessage = message as SimulationStartedMessage
+            roomRef.current = simulationMessage.room
             setRoom(simulationMessage.room)
             const syncedPlayer = findCurrentPlayer(simulationMessage.room, sessionRef.current?.playerId ?? null)
 
