@@ -54,6 +54,22 @@ Original prompt: ok lets add a quick feature for computing the amount of cups th
 - Validation passed with targeted App tests, the full Vitest suite, a production build, the required `web_game_playwright_client` run, and a two-page Playwright browser sanity pass with screenshot artifact `output/web-game/recipe-sliders-planning/host-planning.png`.
 - Browser sanity showed the planning screen rendering the slider controls correctly with no host/guest console errors during the live host/join flow.
 
+## 2026-03-19 13:10:00 PDT
+
+- Created branch `codex/fix-ice-wrap` directly from `origin/main` for a small UI polish pass without opening a new task workspace.
+- Added a dedicated planning inventory layout hook so the stock forecast cards wrap into a stable two-column grid, which keeps the `Ice` card inside the panel instead of drifting into an awkward overflow state.
+- Added a regression test for the planning inventory layout hook and another for sale-price timing during simulation playback.
+- Updated sale-price timing so buy amounts show no later than 500 ms before a customer exits, even when the purchase resolves close to the leave animation.
+- Validation passed with a production build, focused Vitest coverage for the touched planning and playback behaviors, the required `web_game_playwright_client` run, and a larger Playwright screenshot at `output/web-game/ice-wrap-fix/planning-full.png` confirming the inventory cards render with `Ice` on a second row.
+- A broad `vitest run src/App.test.tsx` pass became noisy while the live dev client/browser validation was running because mirrored worktree specs in the repo timed out under contention; no failures were found in the focused tests covering the touched behavior.
+
+## 2026-03-19 13:18:00 PDT
+
+- Corrected the first UI fix after confirming the reported overflow was in the `Buy ingredients` market panel, not the stock forecast cards.
+- Added a dedicated responsive grid hook for the planning market inputs, let the market panel shrink safely with `min-width: 0`, and reduced the ingredient number inputs to compact pill widths closer to the price input.
+- Increased the sale-price playback lead-in from 500 ms to 750 ms and updated the focused timing regression accordingly.
+- Re-validated with focused Vitest coverage, a production build, and a full-page planning screenshot at `output/web-game/ice-wrap-fix/planning-market-1436-full.png` showing the `Ice` purchase field wrapped inside the market panel at the problematic desktop width.
+
 ## 2026-03-19 10:05:47 PDT
 
 - Started a new task workspace at `tasks/active/weather-daylight-simulation/` on `codex/weather-daylight-simulation` to restore simulation weather atmosphere and replace the percentage timeline with a business clock.

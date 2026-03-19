@@ -595,6 +595,58 @@ describe('App', () => {
     expect(screen.getByText(/\$1\.53/)).toBeInTheDocument()
   })
 
+  it('uses the dedicated planning inventory layout classes for responsive wrapping', () => {
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'room_state',
+      room: createRoom(),
+    })
+
+    const inventoryPanel = getPanelByText(/inventory/i)
+    const planningInventoryGrid = inventoryPanel.querySelector('.planning-inventory-grid')
+
+    expect(planningInventoryGrid).not.toBeNull()
+    expect(planningInventoryGrid?.querySelectorAll('.inventory-metric-grid')).toHaveLength(2)
+  })
+
+  it('uses a dedicated responsive grid hook for the planning market inputs', () => {
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'room_state',
+      room: createRoom(),
+    })
+
+    const marketPanel = getPanelByText(/buy ingredients/i)
+    const planningMarketGrid = marketPanel.querySelector('.planning-buy-field-grid')
+
+    expect(planningMarketGrid).not.toBeNull()
+    expect(planningMarketGrid?.querySelectorAll('.buy-field-column')).toHaveLength(3)
+  })
+
   it('updates the ingredient cost per cup when the recipe changes', () => {
     render(<App />)
 
@@ -943,6 +995,51 @@ describe('App', () => {
     })
 
     expect(screen.getByText('+$1.50')).toBeInTheDocument()
+  })
+
+  it('shows the sale amount during the final three quarters of a second before a buying customer exits', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-03-16T12:00:00.000Z'))
+
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'simulation_started',
+      simulationStartAt: Date.parse('2026-03-16T12:00:00.000Z'),
+      room: createHostRoom({}, {
+        phase: 'simulating',
+        simulation: {
+          durationMs: 6000,
+          simulationStartAt: Date.parse('2026-03-16T12:00:00.000Z'),
+          customerEvents: [
+            createSimulationEvent({
+              outcomeAt: 2_000,
+              exitAt: 2_200,
+            }),
+          ],
+        },
+      }),
+    })
+
+    expect(screen.queryByText('+$1.50')).not.toBeInTheDocument()
+
+    act(() => {
+      vi.advanceTimersByTime(1_500)
+    })
+
+    expect(screen.getByText('+$1.50')).toBeInTheDocument()
+    expect(screen.queryByLabelText(/customer approval reaction/i)).not.toBeInTheDocument()
   })
 
   it('shows a developer-only simulation speed slider and updates playback speed', () => {
