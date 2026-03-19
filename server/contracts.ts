@@ -46,9 +46,11 @@ export interface PlayerDayHistoryEntry {
   revenue: number
   purchaseCost: number
   profit: number
+  endingMoney: number
   reputationAfter: number
   cupsSold: number
   satisfaction: number
+  recipeSnapshot: Recipe
 }
 
 export interface MarketBasePrices {

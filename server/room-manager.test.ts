@@ -129,9 +129,15 @@ function createHooks(): RoomGameHooks {
                       revenue: 1.5,
                       purchaseCost: 0.9,
                       profit: 0.6,
+                      endingMoney: player.money + 1.5,
                       reputationAfter: player.reputation + 2,
                       cupsSold: 1,
                       satisfaction: 0.9,
+                      recipeSnapshot: {
+                        lemons: 2,
+                        sugar: 2,
+                        ice: 2,
+                      },
                     },
                   ]
                 : [],
