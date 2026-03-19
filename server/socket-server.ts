@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type Server as HttpServer } from 'n
 
 import { defaultBalanceConfig } from '../src/game/balance'
 import type { SimulationTelemetry } from '../src/game/types'
-import type { ClientMessage, PlayerSession, ServerMessage } from './contracts'
+import type { ClientMessage, PlayerSession, RoomState, ServerMessage } from './contracts'
 import { createDefaultRoomGameHooks } from './default-game-hooks'
 import { RoomManager } from './room-manager'
 import { SqliteTelemetryRepository } from './telemetry-repository'
@@ -85,6 +85,42 @@ function defaultLogger(): LanServerLogger {
   }
 }
 
+type RoomSimulationEvent = NonNullable<NonNullable<RoomState['simulation']>['customerEvents']>[number]
+
+function projectCustomerEventForViewer(
+  room: RoomState,
+  viewerPlayerId: string | null,
+  event: RoomSimulationEvent,
+): RoomSimulationEvent {
+  const viewerOwnsHints =
+    viewerPlayerId !== null &&
+    room.players.find((player) => player.id === viewerPlayerId)?.ownedUpgrades?.recipeFeedbackHints === true
+  const { feedbackHintsByPlayerId, ...publicEvent } = event
+
+  return {
+    ...publicEvent,
+    recipeFeedbackHint:
+      viewerOwnsHints && viewerPlayerId !== null
+        ? feedbackHintsByPlayerId?.[viewerPlayerId] ?? null
+        : null,
+  }
+}
+
+function projectRoomForViewer(room: RoomState, viewerPlayerId: string | null): RoomState {
+  return {
+    ...room,
+    simulation:
+      room.simulation === null
+        ? null
+        : {
+            ...room.simulation,
+            customerEvents: room.simulation.customerEvents.map((event) =>
+              projectCustomerEventForViewer(room, viewerPlayerId, event),
+            ),
+          },
+  }
+}
+
 export async function createLanServer(
   options: LanServerOptions = {},
 ): Promise<{
@@ -114,10 +150,13 @@ export async function createLanServer(
   })
   const websocketServer: WebSocketServer = new WebSocketServer({ server: httpServer })
 
-  function broadcast(roomId: string, message: ServerMessage): void {
+  function broadcast(roomId: string, message: Extract<ServerMessage, { type: 'room_state' | 'simulation_started' }>): void {
     connections.forEach((connection) => {
       if (connection.session?.roomId === roomId) {
-        send(connection.socket, message)
+        send(connection.socket, {
+          ...message,
+          room: projectRoomForViewer(message.room, connection.session.playerId),
+        })
       }
     })
   }
@@ -196,6 +235,7 @@ export async function createLanServer(
       moneyBeforePlanning: player.money,
       reputationBeforePlanning: player.reputation,
       inventoryBeforePlanning: player.inventory,
+      recipeFeedbackHintsOwnedBeforePlanning: player.ownedUpgrades?.recipeFeedbackHints === true,
       purchases: plan.purchases,
       recipe: plan.recipe,
       price: plan.price,
@@ -231,6 +271,7 @@ export async function createLanServer(
         moneyAfterResults: player.money,
         reputationAfterResults: player.reputation,
         inventoryAfterResults: player.inventory,
+        recipeFeedbackHintsOwnedAfterResults: player.ownedUpgrades?.recipeFeedbackHints === true,
         cupsSold: player.dailyResults.cupsSold,
         revenue: player.dailyResults.revenue,
         satisfaction: player.dailyResults.satisfaction,
@@ -360,6 +401,25 @@ export async function createLanServer(
             roomId: room.roomId,
             playerId,
             hostPlayerId: room.hostPlayerId,
+          })
+          broadcastRoomState(room.roomId)
+          return
+        }
+
+        if (message.type === 'purchase_upgrade') {
+          const room = manager.purchaseUpgrade({
+            roomId: message.roomId,
+            playerId: message.playerId,
+            upgradeId: message.upgradeId,
+          })
+          logger.info('upgrade_purchased', {
+            clientAddress: connection.clientAddress,
+            playerId: message.playerId,
+            roomId: message.roomId,
+            upgradeId: message.upgradeId,
+          })
+          persistTelemetry('upgrade_purchased', message.roomId, message.playerId, () => {
+            telemetryRepository.touchGameActivity(message.roomId)
           })
           broadcastRoomState(room.roomId)
           return

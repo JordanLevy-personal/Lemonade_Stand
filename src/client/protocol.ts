@@ -1,3 +1,9 @@
+import type {
+  OwnedUpgrades,
+  RecipeFeedbackHint,
+  RunUpgradeId,
+} from '../game/types'
+
 export type RoomPhase = 'lobby' | 'planning' | 'simulating' | 'results' | 'paused'
 export type GameMode = 'singleplayer' | 'multiplayer'
 export type RunLengthDays = 14 | 30
@@ -59,6 +65,7 @@ export interface PlayerState {
   money: number
   inventory: Inventory
   reputation: number
+  ownedUpgrades?: OwnedUpgrades
   hasSubmittedPlan: boolean
   connectionStatus: 'connected' | 'disconnected'
   dailyPlan: PlayerPlan | null
@@ -88,6 +95,7 @@ export interface CustomerEvent {
   lane: number
   xJitter: number
   yJitter: number
+  recipeFeedbackHint?: RecipeFeedbackHint | null
 }
 
 export interface RoomSimulation {
@@ -174,6 +182,13 @@ export interface SubmitPlanMessage {
   plan: PlayerPlan
 }
 
+export interface PurchaseUpgradeMessage {
+  type: 'purchase_upgrade'
+  roomId: string
+  playerId: string
+  upgradeId: RunUpgradeId
+}
+
 export interface RequestNextDayMessage {
   type: 'request_next_day'
   roomId: string
@@ -184,4 +199,5 @@ export type ClientMessage =
   | CreateRoomMessage
   | JoinRoomMessage
   | SubmitPlanMessage
+  | PurchaseUpgradeMessage
   | RequestNextDayMessage

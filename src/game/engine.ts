@@ -12,9 +12,11 @@ import type {
   DailyPlan,
   FactionDefinition,
   Inventory,
+  OwnedUpgrades,
   PlayerDailyResults,
   PlayerState,
   Recipe,
+  RecipeFeedbackHint,
   RoomState,
   SimulationTelemetry,
   TelemetryCustomerEvent,
@@ -31,6 +33,7 @@ const CUSTOMER_STAND_DWELL_MS = 1_000
 const CUSTOMER_BETWEEN_STANDS_MS = 840
 const CUSTOMER_EXIT_TRAVEL_MS = 1_080
 const CUSTOMER_SPAWN_BUFFER_MS = 300
+const RECIPE_HINT_INGREDIENT_ORDER = ['lemons', 'sugar', 'ice'] as const
 const CUSTOMER_END_BUFFER_MS = 300
 
 function roundMoney(value: number): number {
@@ -74,6 +77,12 @@ function cloneInventory(inventory: Inventory): Inventory {
   }
 }
 
+function defaultOwnedUpgrades(): OwnedUpgrades {
+  return {
+    recipeFeedbackHints: false,
+  }
+}
+
 function addInventory(left: Inventory, right: Inventory): Inventory {
   return {
     lemons: roundToPrecision(left.lemons + right.lemons, RECIPE_PRECISION),
@@ -104,6 +113,54 @@ export function sanitizeRecipe(recipe: Recipe): Recipe {
     ),
     ice: clamp(roundToPrecision(recipe.ice, RECIPE_PRECISION), 0, 5),
   }
+}
+
+export function calculateRecipeFeedbackHint(
+  offeredRecipe: Recipe,
+  preferredRecipe: Recipe,
+): RecipeFeedbackHint | null {
+  let strongestIngredient: keyof Recipe | null = null
+  let strongestDelta = 0
+
+  for (const ingredient of RECIPE_HINT_INGREDIENT_ORDER) {
+    const delta = preferredRecipe[ingredient] - offeredRecipe[ingredient]
+    const absoluteDelta = Math.abs(delta)
+
+    if (absoluteDelta > strongestDelta) {
+      strongestIngredient = ingredient
+      strongestDelta = absoluteDelta
+    }
+  }
+
+  if (strongestIngredient === null || strongestDelta === 0) {
+    return null
+  }
+
+  const delta = preferredRecipe[strongestIngredient] - offeredRecipe[strongestIngredient]
+
+  return {
+    ingredient: strongestIngredient,
+    direction: delta > 0 ? 'more' : 'less',
+  }
+}
+
+function recipeFeedbackHintsForPlayers(
+  players: RoomState['players'],
+  preferredRecipe: Recipe,
+): Record<string, RecipeFeedbackHint> {
+  return players.reduce<Record<string, RecipeFeedbackHint>>((accumulator, player) => {
+    if (player.ownedUpgrades?.recipeFeedbackHints !== true) {
+      return accumulator
+    }
+
+    const hint = calculateRecipeFeedbackHint(player.dailyPlan.recipe, preferredRecipe)
+
+    if (hint !== null) {
+      accumulator[player.id] = hint
+    }
+
+    return accumulator
+  }, {})
 }
 
 function createDailyPlan(balance: BalanceConfig, current?: Partial<DailyPlan>): DailyPlan {
@@ -147,6 +204,7 @@ function createPlayer(
     money: balance.startingMoney,
     inventory: emptyInventory(),
     reputation: balance.startingReputation,
+    ownedUpgrades: defaultOwnedUpgrades(),
     isReady: false,
     connectionStatus: 'connected',
     dailyPlan: createDailyPlan(balance),
@@ -1142,6 +1200,7 @@ export function startSimulationWithTelemetry(
       finalOutcomeReason = 'reroute_exhausted_after_sold_out'
     }
 
+    const feedbackHintsByPlayerId = recipeFeedbackHintsForPlayers(nextRoom.players, preferredRecipe)
     nextRoom = applyCustomerResolution(nextRoom, soldOutPlayerIds, winnerId, finalSalePrice)
 
     if (winnerId !== null) {
@@ -1199,6 +1258,9 @@ export function startSimulationWithTelemetry(
       lane: timing.lane,
       xJitter: timing.xJitter,
       yJitter: timing.yJitter,
+      ...(Object.keys(feedbackHintsByPlayerId).length > 0
+        ? { feedbackHintsByPlayerId }
+        : {}),
     })
     telemetryEvents.push({
       customerEventId,

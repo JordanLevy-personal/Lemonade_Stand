@@ -4,6 +4,7 @@ export type GameMode = 'singleplayer' | 'multiplayer'
 export type Weather = 'sunny' | 'hot' | 'cloudy' | 'raining'
 
 export type ConnectionStatus = 'connected' | 'disconnected'
+export type RunUpgradeId = 'recipe-feedback-hints'
 
 export type CustomerOutcome = 'buy' | 'skip' | 'soldOut'
 export type CustomerOutcomeReason =
@@ -24,6 +25,15 @@ export interface Recipe {
   lemons: number
   sugar: number
   ice: number
+}
+
+export interface RecipeFeedbackHint {
+  ingredient: keyof Recipe
+  direction: 'more' | 'less'
+}
+
+export interface OwnedUpgrades {
+  recipeFeedbackHints: boolean
 }
 
 export interface DailyPlan {
@@ -71,6 +81,7 @@ export interface PlayerState {
   reputation: number
   isReady: boolean
   connectionStatus: ConnectionStatus
+  ownedUpgrades?: OwnedUpgrades
   dailyPlan: DailyPlan
   dailyResults: PlayerDailyResults
   history: PlayerDayHistoryEntry[]
@@ -98,6 +109,7 @@ export interface CustomerEvent {
   lane: number
   xJitter: number
   yJitter: number
+  feedbackHintsByPlayerId?: Record<string, RecipeFeedbackHint | null>
 }
 
 export interface RoomSimulation {
@@ -202,6 +214,7 @@ export interface BalanceConfig {
   startingReputation: number
   defaultRecipe: Recipe
   defaultPrice: number
+  recipeFeedbackHintUpgradeCost: number
   customerTastePreferenceWeight: number
   weatherProfiles: Record<Weather, WeatherProfile>
   marketPriceBands: Record<keyof Inventory, IngredientPriceBand>

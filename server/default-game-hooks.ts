@@ -60,6 +60,9 @@ function toGameRoom(room: RoomState): GameRoomState {
       money: player.money,
       inventory: player.inventory,
       reputation: player.reputation,
+      ownedUpgrades: player.ownedUpgrades ?? {
+        recipeFeedbackHints: false,
+      },
       isReady: player.hasSubmittedPlan,
       connectionStatus: player.connectionStatus,
       dailyPlan:
@@ -124,6 +127,7 @@ function toGameRoom(room: RoomState): GameRoomState {
               lane: event.lane,
               xJitter: event.xJitter,
               yJitter: event.yJitter,
+              feedbackHintsByPlayerId: event.feedbackHintsByPlayerId,
             })),
             durationMs: room.simulation.durationMs,
             totalCustomers: room.simulation.customerEvents.length,
@@ -159,6 +163,9 @@ function toServerRoom(gameRoom: GameRoomState): RoomState {
       money: player.money,
       inventory: player.inventory,
       reputation: player.reputation,
+      ownedUpgrades: player.ownedUpgrades ?? {
+        recipeFeedbackHints: false,
+      },
       dailyPlan: player.dailyPlan,
       dailyResults: toServerResults(player.dailyResults),
       history: player.history.map((entry) => ({
@@ -200,6 +207,7 @@ function toServerRoom(gameRoom: GameRoomState): RoomState {
               lane: event.lane,
               xJitter: event.xJitter,
               yJitter: event.yJitter,
+              feedbackHintsByPlayerId: event.feedbackHintsByPlayerId,
             })),
             simulationStartAt: null,
             durationMs: gameRoom.simulation.durationMs,
@@ -248,6 +256,13 @@ export function createDefaultRoomGameHooks(): RoomGameHooks {
   return {
     createDay(day) {
       return createPreviewDay(day)
+    },
+    getUpgradeCost(upgradeId) {
+      if (upgradeId !== 'recipe-feedback-hints') {
+        throw new Error('Unknown upgrade.')
+      }
+
+      return defaultBalanceConfig.recipeFeedbackHintUpgradeCost
     },
     startSimulation(room, simulationStartAt) {
       let gameRoom = toGameRoom(room)
@@ -303,6 +318,9 @@ export function createDefaultRoomGameHooks(): RoomGameHooks {
         money: defaultBalanceConfig.startingMoney,
         inventory: emptyInventory(),
         reputation: defaultBalanceConfig.startingReputation,
+        ownedUpgrades: {
+          recipeFeedbackHints: false,
+        },
       }
     },
   }
