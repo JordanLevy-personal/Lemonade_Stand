@@ -17,6 +17,7 @@ import type {
   ClientMessage,
   CustomerEvent,
   FactionDefinition,
+  GameMode,
   RoomState,
   SimulationStartedMessage,
 } from './client/protocol'
@@ -43,6 +44,7 @@ interface StoredRoomSession {
 interface IdentityDraft {
   name: string
   factionId: string
+  gameMode: GameMode
 }
 
 interface LobbyForm {
@@ -417,6 +419,7 @@ function LobbyScreen({
   error,
   onChange,
   onHost,
+  onPlaySinglePlayer,
   onJoin,
   onReconnect,
 }: {
@@ -425,16 +428,17 @@ function LobbyScreen({
   error: string | null
   onChange: (next: Partial<LobbyForm>) => void
   onHost: () => void
+  onPlaySinglePlayer: () => void
   onJoin: () => void
   onReconnect: () => void
 }): JSX.Element {
   return (
     <section className="app-stage">
       <div className="panel hero-panel">
-        <p className="eyebrow">Multiplayer MVP</p>
-        <h1>Multiplayer Lemonade Stand</h1>
+        <p className="eyebrow">Room-Based MVP</p>
+        <h1>Lemonade Stand</h1>
         <p className="muted">
-          Host a room on this device, share the client URL or room code, and let the market decide who wins the rush.
+          Start a solo run instantly or host a room on this device, share the client URL or room code, and let the market decide who wins the rush.
         </p>
       </div>
 
@@ -469,6 +473,9 @@ function LobbyScreen({
           <div className="action-row">
             <button className="action-button action-button-primary" onClick={onHost}>
               Host Room
+            </button>
+            <button className="action-button action-button-secondary" onClick={onPlaySinglePlayer}>
+              Play Single-Player
             </button>
           </div>
         </section>
@@ -510,16 +517,20 @@ function LobbyScreen({
 
 function WaitingScreen({
   roomId,
+  gameMode,
 }: {
   roomId: string
+  gameMode: GameMode
 }): JSX.Element {
   return (
     <section className="app-stage">
       <div className="panel hero-panel">
-        <p className="eyebrow">Room created</p>
+        <p className="eyebrow">{gameMode === 'singleplayer' ? 'Solo game created' : 'Room created'}</p>
         <h1>{roomId}</h1>
         <p className="muted">
-          Share your client URL with the second player and have them join room {roomId}.
+          {gameMode === 'singleplayer'
+            ? 'Loading your solo market run.'
+            : `Share your client URL with the second player and have them join room ${roomId}.`}
         </p>
       </div>
     </section>
@@ -555,7 +566,10 @@ function PlanningScreen({
         <p className="eyebrow">Planning phase</p>
         <h1>Set today&apos;s edge</h1>
         <p className="muted">
-          Forecast: <strong>{weatherLabel(room)}</strong>. Plans stay private until both stands lock in.
+          Forecast: <strong>{weatherLabel(room)}</strong>.{' '}
+          {room.targetPlayerCount === 1
+            ? 'Lock in your plan to start the day.'
+            : 'Plans stay private until both stands lock in.'}
         </p>
       </div>
 
@@ -699,7 +713,13 @@ function PlanningScreen({
               Lock in Plan
             </button>
             <p className="muted">
-              {currentPlayer.hasSubmittedPlan ? 'Plan locked. Waiting on the other stand.' : 'Your choices stay private until both players are ready.'}
+              {currentPlayer.hasSubmittedPlan
+                ? room.targetPlayerCount === 1
+                  ? 'Plan locked. Starting the day...'
+                  : 'Plan locked. Waiting on the other stand.'
+                : room.targetPlayerCount === 1
+                  ? 'You are the only stand today.'
+                  : 'Your choices stay private until both players are ready.'}
             </p>
           </div>
           {error !== null ? <p className="error-text">{error}</p> : null}
@@ -735,13 +755,18 @@ function SimulationScreen({
     resolvedEvents.filter((event) => event.outcome === 'buy' && event.chosenPlayerId === player.id).length,
   )
   const liveInventory = inventoryForSimulation(currentPlayer, simulation.customerEvents, elapsedMs)
+  const visiblePlayers = room.targetPlayerCount === 1 ? room.players.slice(0, 1) : room.players
 
   return (
     <section className="app-stage">
       <div className="panel hero-panel">
         <p className="eyebrow">Simulation phase</p>
         <h1>Crowd Rush</h1>
-        <p className="muted">Shared timeline live. The same customer wave is playing on every connected laptop.</p>
+        <p className="muted">
+          {room.targetPlayerCount === 1
+            ? 'Your customer wave is live.'
+            : 'Shared timeline live. The same customer wave is playing on every connected laptop.'}
+        </p>
       </div>
 
       <div className="metric-grid">
@@ -753,16 +778,16 @@ function SimulationScreen({
       <section className="panel crowd-panel">
         <div className="crowd-scene">
           <div className="crowd-road" aria-hidden="true" />
-          <div className="stand-column stand-column-left">
-            <p className="stand-name">{room.players[0]?.name}</p>
-            <img className="stand-sprite" src={StandSprite} alt={`${room.players[0]?.name} stand`} />
-            <span className="stand-score">{playerSales[0] ?? 0} sales</span>
-          </div>
-          <div className="stand-column stand-column-right">
-            <p className="stand-name">{room.players[1]?.name}</p>
-            <img className="stand-sprite" src={StandSprite} alt={`${room.players[1]?.name} stand`} />
-            <span className="stand-score">{playerSales[1] ?? 0} sales</span>
-          </div>
+          {visiblePlayers.map((player, index) => (
+            <div
+              className={index === 0 ? 'stand-column stand-column-left' : 'stand-column stand-column-right'}
+              key={player.id}
+            >
+              <p className="stand-name">{player.name}</p>
+              <img className="stand-sprite" src={StandSprite} alt={`${player.name} stand`} />
+              <span className="stand-score">{playerSales[index] ?? 0} sales</span>
+            </div>
+          ))}
 
           {visibleEvents.map((event) => (
             <div className={`crowd-customer crowd-${event.outcome}`} key={event.id} style={buildSceneStyle(event, elapsedMs, room.players)}>
@@ -799,13 +824,18 @@ function ResultsScreen({
 }): JSX.Element {
   const hasRequestedNextDay =
     currentPlayerId !== null && room.requestedNextDayPlayerIds.includes(currentPlayerId)
+  const isSingleplayerRoom = room.targetPlayerCount === 1
 
   return (
     <section className="app-stage">
       <div className="panel hero-panel">
         <p className="eyebrow">Results phase</p>
         <h1>Market Results</h1>
-        <p className="muted">Compare both stands, then request the next day when everyone is ready to keep playing.</p>
+        <p className="muted">
+          {isSingleplayerRoom
+            ? 'Review your stand results, then continue when you are ready.'
+            : 'Compare both stands, then request the next day when everyone is ready to keep playing.'}
+        </p>
       </div>
 
       <div className="panel-grid">
@@ -829,12 +859,16 @@ function ResultsScreen({
           disabled={hasRequestedNextDay}
           onClick={onNextDay}
         >
-          Request Next Day
+          {isSingleplayerRoom ? 'Next Day' : 'Request Next Day'}
         </button>
         <p className="muted">
           {hasRequestedNextDay
-            ? 'Next day requested. Waiting on the other stand.'
-            : 'Request the next day when you are ready to keep playing.'}
+            ? isSingleplayerRoom
+              ? 'Loading the next day...'
+              : 'Next day requested. Waiting on the other stand.'
+            : isSingleplayerRoom
+              ? 'Start the next day when you are ready.'
+              : 'Request the next day when you are ready to keep playing.'}
         </p>
       </div>
     </section>
@@ -1009,9 +1043,13 @@ function App(): JSX.Element {
     connectionRef.current.send(message)
   }
 
-  function hostRoom(): void {
+  function startGame(gameMode: GameMode, targetPlayerCount: number): void {
     if (lobbyForm.name.trim() === '') {
-      setError('Enter your name before hosting a room.')
+      setError(
+        gameMode === 'singleplayer'
+          ? 'Enter your name before starting a solo game.'
+          : 'Enter your name before hosting a room.',
+      )
       return
     }
 
@@ -1019,14 +1057,25 @@ function App(): JSX.Element {
       {
         type: 'create_room',
         name: lobbyForm.name,
+        gameMode,
+        targetPlayerCount,
         faction: factionDefinition(lobbyForm.factionId),
         analyticsPlayerId: analyticsPlayerIdRef.current,
       },
       {
         name: lobbyForm.name,
         factionId: lobbyForm.factionId,
+        gameMode,
       },
     )
+  }
+
+  function hostRoom(): void {
+    startGame('multiplayer', 2)
+  }
+
+  function playSinglePlayer(): void {
+    startGame('singleplayer', 1)
   }
 
   function joinRoomFlow(playerId?: string, factionId = DEFAULT_JOIN_FACTION): void {
@@ -1051,6 +1100,7 @@ function App(): JSX.Element {
       {
         name: lobbyForm.name,
         factionId,
+        gameMode: 'multiplayer',
       },
     )
   }
@@ -1078,9 +1128,12 @@ function App(): JSX.Element {
       {
         name: reconnectSession.name,
         factionId: reconnectSession.factionId,
+        gameMode: 'multiplayer',
       },
     )
   }
+
+  const pendingGameMode = room?.gameMode ?? pendingIdentityRef.current?.gameMode ?? 'multiplayer'
 
   function lockInPlan(): void {
     if (room === null || session === null) {
@@ -1117,7 +1170,7 @@ function App(): JSX.Element {
       <header className="topbar">
         <div>
           <p className="eyebrow">Shared Market</p>
-          <strong className="topbar-title">Lemonade Stand Multiplayer</strong>
+          <strong className="topbar-title">Lemonade Stand</strong>
         </div>
         {room !== null ? (
           <div className="topbar-metrics">
@@ -1128,8 +1181,11 @@ function App(): JSX.Element {
         ) : null}
       </header>
 
-      {session !== null && (room === null || room.phase === 'lobby') ? (
-        <WaitingScreen roomId={room?.roomId ?? session.roomId} />
+      {session !== null && (room === null || room.phase === 'lobby') && pendingGameMode === 'multiplayer' ? (
+        <WaitingScreen
+          roomId={room?.roomId ?? session.roomId}
+          gameMode={pendingGameMode}
+        />
       ) : null}
       {room === null ? (
         <LobbyScreen
@@ -1138,6 +1194,7 @@ function App(): JSX.Element {
           error={error}
           onChange={(next) => setLobbyForm((current) => ({ ...current, ...next }))}
           onHost={hostRoom}
+          onPlaySinglePlayer={playSinglePlayer}
           onJoin={() => joinRoomFlow(undefined, lobbyForm.factionId)}
           onReconnect={reconnectToRoom}
         />

@@ -1,7 +1,7 @@
 {
   "version": 1,
   "updatedAt": "2026-03-18",
-  "purpose": "Canonical catalog of raw playtest telemetry logged for multiplayer balancing and post-run analysis.",
+  "purpose": "Canonical catalog of raw playtest telemetry logged for solo and multiplayer balancing and post-run analysis.",
   "reviewPolicy": {
     "requiredForFeatureTypes": [
       "gameplay",
@@ -42,6 +42,20 @@
           "source": "server room seed",
           "implemented": true,
           "rationale": "Lets offline analysis correlate balancing outcomes with deterministic generation."
+        },
+        {
+          "name": "gameMode",
+          "type": "enum",
+          "source": "room configuration at create_room",
+          "implemented": true,
+          "rationale": "Separates solo and multiplayer runs when comparing pacing, balance, and retention."
+        },
+        {
+          "name": "playerCount",
+          "type": "integer",
+          "source": "room target player count",
+          "implemented": true,
+          "rationale": "Lets analysts segment runs by configured seat count as the game expands beyond the current 1-2 player UI."
         },
         {
           "name": "createdAt",
@@ -85,6 +99,20 @@
           "source": "room day",
           "implemented": true,
           "rationale": "Groups planning and result records by day."
+        },
+        {
+          "name": "gameMode",
+          "type": "enum",
+          "source": "room configuration at planning time",
+          "implemented": true,
+          "rationale": "Lets submitted plans and day outcomes be compared between solo and multiplayer contexts."
+        },
+        {
+          "name": "playerCount",
+          "type": "integer",
+          "source": "room target player count",
+          "implemented": true,
+          "rationale": "Explains customer-scaling context for each submitted plan and resolved day."
         },
         {
           "name": "factionId",

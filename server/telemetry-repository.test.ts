@@ -57,12 +57,16 @@ describe('SqliteTelemetryRepository', () => {
       gameId: 'ROOM01',
       roomId: 'ROOM01',
       rngSeed: 1234,
+      gameMode: 'singleplayer',
+      playerCount: 1,
     })
     repository.upsertPlayerDayPlan({
       gameId: 'ROOM01',
       dayNumber: 1,
       playerId: 'host-1',
       analyticsPlayerId: 'analytics-host',
+      gameMode: 'singleplayer',
+      playerCount: 1,
       factionId: 'sun-guild',
       weather: 'sunny',
       marketBasePrices: {
@@ -95,6 +99,8 @@ describe('SqliteTelemetryRepository', () => {
       dayNumber: 1,
       playerId: 'host-1',
       analyticsPlayerId: 'analytics-host',
+      gameMode: 'singleplayer',
+      playerCount: 1,
       factionId: 'sun-guild',
       weather: 'sunny',
       marketBasePrices: {
@@ -145,11 +151,11 @@ describe('SqliteTelemetryRepository', () => {
 
     const playerDayRows = readTable(
       databasePath,
-      'select analytics_player_id, purchases_lemons, purchases_sugar, purchases_ice, price, cups_sold, revenue, customers_sold_out from player_day_records',
+      'select analytics_player_id, game_mode, player_count, purchases_lemons, purchases_sugar, purchases_ice, price, cups_sold, revenue, customers_sold_out from player_day_records',
     )
     const gameRows = readTable(
       databasePath,
-      'select game_id, room_id, rng_seed from games',
+      'select game_id, room_id, rng_seed, game_mode, player_count from games',
     )
 
     expect(gameRows).toEqual([
@@ -157,11 +163,15 @@ describe('SqliteTelemetryRepository', () => {
         game_id: 'ROOM01',
         room_id: 'ROOM01',
         rng_seed: 1234,
+        game_mode: 'singleplayer',
+        player_count: 1,
       },
     ])
     expect(playerDayRows).toEqual([
       {
         analytics_player_id: 'analytics-host',
+        game_mode: 'singleplayer',
+        player_count: 1,
         purchases_lemons: 4,
         purchases_sugar: 3,
         purchases_ice: 2,
@@ -180,6 +190,8 @@ describe('SqliteTelemetryRepository', () => {
       gameId: 'ROOM02',
       roomId: 'ROOM02',
       rngSeed: 999,
+      gameMode: 'multiplayer',
+      playerCount: 2,
     })
     repository.insertCustomerProfiles({
       gameId: 'ROOM02',

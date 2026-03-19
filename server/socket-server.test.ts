@@ -102,6 +102,8 @@ describe('createLanServer', () => {
       JSON.stringify({
         type: 'create_room',
         name: 'Alex',
+        gameMode: 'multiplayer',
+        targetPlayerCount: 2,
         faction: {
           id: 'sun-guild',
           name: 'Sun Guild',
@@ -189,6 +191,8 @@ describe('createLanServer', () => {
       JSON.stringify({
         type: 'create_room',
         name: 'Alex',
+        gameMode: 'multiplayer',
+        targetPlayerCount: 2,
         faction: {
           id: 'sun-guild',
           name: 'Sun Guild',
@@ -269,16 +273,25 @@ describe('createLanServer', () => {
 
     await new Promise((resolve) => setTimeout(resolve, 50))
 
-    const games = readAll(databasePath, 'select game_id from games')
+    const games = readAll(
+      databasePath,
+      'select game_id, game_mode, player_count from games',
+    )
     const playerDays = readAll(
       databasePath,
-      'select analytics_player_id, player_id, day_number from player_day_records order by analytics_player_id',
+      'select analytics_player_id, player_id, day_number, game_mode, player_count from player_day_records order by analytics_player_id',
     )
     const customerProfiles = readAll(databasePath, 'select count(*) as count from customer_profiles')
     const customerEvents = readAll(databasePath, 'select count(*) as count from customer_events')
     const customerOfferScores = readAll(databasePath, 'select count(*) as count from customer_offer_scores')
 
-    expect(games).toEqual([{ game_id: hostConnected.roomId }])
+    expect(games).toEqual([
+      {
+        game_id: hostConnected.roomId,
+        game_mode: 'multiplayer',
+        player_count: 2,
+      },
+    ])
     expect(playerDays).toHaveLength(2)
     expect(playerDays).toEqual(
       expect.arrayContaining([
@@ -286,11 +299,15 @@ describe('createLanServer', () => {
           analytics_player_id: 'analytics-host',
           player_id: hostConnected.playerId,
           day_number: 1,
+          game_mode: 'multiplayer',
+          player_count: 2,
         },
         {
           analytics_player_id: 'analytics-guest',
           player_id: guestConnected.playerId,
           day_number: 1,
+          game_mode: 'multiplayer',
+          player_count: 2,
         },
       ]),
     )

@@ -1,4 +1,5 @@
 export type RoomPhase = 'lobby' | 'planning' | 'simulating' | 'results' | 'paused'
+export type GameMode = 'singleplayer' | 'multiplayer'
 
 export type Weather = 'sunny' | 'hot' | 'cloudy' | 'raining'
 
@@ -142,6 +143,7 @@ export interface RoomState {
   version: 2
   roomId: string
   hostPlayerId: string
+  gameMode: GameMode
   day: number
   weather: Weather | null
   phase: RoomPhase

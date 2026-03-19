@@ -146,34 +146,59 @@ function createManager(now = 10_000): RoomManager {
   return new RoomManager(createHooks(), () => now)
 }
 
+function createMultiplayerRoom(manager: RoomManager): RoomState {
+  return manager.createRoom({
+    roomId: 'ROOM01',
+    playerId: 'host-1',
+    name: 'Host',
+    faction: FACTION_ALPHA,
+    analyticsPlayerId: 'analytics-host',
+    gameMode: 'multiplayer',
+    targetPlayerCount: 2,
+  })
+}
+
+function createSingleplayerRoom(manager: RoomManager): RoomState {
+  return manager.createRoom({
+    roomId: 'SOLO1',
+    playerId: 'solo-host',
+    name: 'Solo Host',
+    faction: FACTION_ALPHA,
+    analyticsPlayerId: 'analytics-solo-host',
+    gameMode: 'singleplayer',
+    targetPlayerCount: 1,
+  })
+}
+
 describe('RoomManager', () => {
   it('creates a lobby room with the host connected', () => {
     const manager = createManager()
 
-    const room = manager.createRoom({
-      roomId: 'ROOM01',
-      playerId: 'host-1',
-      name: 'Host',
-      faction: FACTION_ALPHA,
-      analyticsPlayerId: 'analytics-host',
-    })
+    const room = createMultiplayerRoom(manager)
 
     expect(room.roomId).toBe('ROOM01')
     expect(room.hostPlayerId).toBe('host-1')
     expect(room.phase).toBe('lobby')
+    expect(room.gameMode).toBe('multiplayer')
+    expect(room.targetPlayerCount).toBe(2)
     expect(room.players).toHaveLength(1)
     expect(room.players[0]?.connectionStatus).toBe('connected')
   })
 
+  it('creates a planning singleplayer room immediately', () => {
+    const manager = createManager()
+
+    const room = createSingleplayerRoom(manager)
+
+    expect(room.phase).toBe('planning')
+    expect(room.gameMode).toBe('singleplayer')
+    expect(room.targetPlayerCount).toBe(1)
+    expect(room.players).toHaveLength(1)
+  })
+
   it('moves to planning when the second player joins', () => {
     const manager = createManager()
-    manager.createRoom({
-      roomId: 'ROOM01',
-      playerId: 'host-1',
-      name: 'Host',
-      faction: FACTION_ALPHA,
-      analyticsPlayerId: 'analytics-host',
-    })
+    createMultiplayerRoom(manager)
 
     const room = manager.joinRoom({
       roomId: 'ROOM01',
@@ -189,13 +214,7 @@ describe('RoomManager', () => {
 
   it('starts simulation automatically once both players submit plans', () => {
     const manager = createManager(12_000)
-    manager.createRoom({
-      roomId: 'ROOM01',
-      playerId: 'host-1',
-      name: 'Host',
-      faction: FACTION_ALPHA,
-      analyticsPlayerId: 'analytics-host',
-    })
+    createMultiplayerRoom(manager)
     manager.joinRoom({
       roomId: 'ROOM01',
       name: 'Guest',
@@ -220,15 +239,24 @@ describe('RoomManager', () => {
     expect(secondResult.room.simulation?.simulationStartAt).toBe(13_000)
   })
 
+  it('starts simulation immediately once the solo player submits a plan', () => {
+    const manager = createManager(12_000)
+    createSingleplayerRoom(manager)
+
+    const result = manager.submitPlan({
+      roomId: 'SOLO1',
+      playerId: 'solo-host',
+      plan: DEFAULT_PLAN,
+    })
+
+    expect(result.simulationStartedAt).toBe(13_000)
+    expect(result.room.phase).toBe('simulating')
+    expect(result.room.simulation?.simulationStartAt).toBe(13_000)
+  })
+
   it('pauses on disconnect and resumes the previous phase on reconnect', () => {
     const manager = createManager()
-    manager.createRoom({
-      roomId: 'ROOM01',
-      playerId: 'host-1',
-      name: 'Host',
-      faction: FACTION_ALPHA,
-      analyticsPlayerId: 'analytics-host',
-    })
+    createMultiplayerRoom(manager)
     manager.joinRoom({
       roomId: 'ROOM01',
       name: 'Guest',
@@ -257,13 +285,7 @@ describe('RoomManager', () => {
 
   it('reclaims a disconnected seat by matching name and faction when playerId is missing', () => {
     const manager = createManager()
-    manager.createRoom({
-      roomId: 'ROOM01',
-      playerId: 'host-1',
-      name: 'Host',
-      faction: FACTION_ALPHA,
-      analyticsPlayerId: 'analytics-host',
-    })
+    createMultiplayerRoom(manager)
     manager.joinRoom({
       roomId: 'ROOM01',
       name: 'Guest',
@@ -288,15 +310,23 @@ describe('RoomManager', () => {
     expect(resumed.players[1]?.connectionStatus).toBe('connected')
   })
 
+  it('rejects joins for a singleplayer room', () => {
+    const manager = createManager()
+    createSingleplayerRoom(manager)
+
+    expect(() =>
+      manager.joinRoom({
+        roomId: 'SOLO1',
+        name: 'Guest',
+        faction: FACTION_BETA,
+        analyticsPlayerId: 'analytics-guest',
+      }),
+    ).toThrow('That room is already full.')
+  })
+
   it('waits for both players to request the next day before resetting planning', () => {
     const manager = createManager()
-    manager.createRoom({
-      roomId: 'ROOM01',
-      playerId: 'host-1',
-      name: 'Host',
-      faction: FACTION_ALPHA,
-      analyticsPlayerId: 'analytics-host',
-    })
+    createMultiplayerRoom(manager)
     manager.joinRoom({
       roomId: 'ROOM01',
       name: 'Guest',
@@ -331,5 +361,25 @@ describe('RoomManager', () => {
     expect(afterSecondRequest.phase).toBe('planning')
     expect(afterSecondRequest.day).toBe(2)
     expect(afterSecondRequest.players.every((player) => player.hasSubmittedPlan === false)).toBe(true)
+  })
+
+  it('advances to the next day immediately after the solo player requests it', () => {
+    const manager = createManager()
+    createSingleplayerRoom(manager)
+    manager.submitPlan({
+      roomId: 'SOLO1',
+      playerId: 'solo-host',
+      plan: DEFAULT_PLAN,
+    })
+    manager.completeSimulation('SOLO1')
+
+    const nextDayRoom = manager.requestNextDay({
+      roomId: 'SOLO1',
+      playerId: 'solo-host',
+    })
+
+    expect(nextDayRoom.phase).toBe('planning')
+    expect(nextDayRoom.day).toBe(2)
+    expect(nextDayRoom.requestedNextDayPlayerIds).toEqual([])
   })
 })

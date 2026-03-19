@@ -251,15 +251,19 @@ export function createRoom(
     hostPlayerId: string
     hostPlayerName: string
     hostSessionId: string
+    gameMode: RoomState['gameMode']
+    targetPlayerCount: number
     hostFactionId?: string
     seed?: number
   },
   balance: BalanceConfig = defaultBalanceConfig,
 ): RoomState {
+  const targetPlayerCount = Math.max(1, input.targetPlayerCount)
   const baseRoom: RoomState = {
     version: 2,
     roomId: input.roomId,
     hostPlayerId: input.hostPlayerId,
+    gameMode: input.gameMode,
     day: 1,
     weather: null,
     phase: 'lobby',
@@ -279,17 +283,21 @@ export function createRoom(
     marketBasePrices: null,
     simulation: null,
     customerRoster: [],
-    maxPlayers: balance.maxPlayers,
+    maxPlayers: targetPlayerCount,
     rng: {
       seed: normalizeSeed(input.seed ?? Date.now()),
     },
   }
 
   const [customerRoster, roomWithRosterRng] = createCustomerRoster(baseRoom, balance)
-  return {
+  const initializedRoom: RoomState = {
     ...roomWithRosterRng,
     customerRoster,
   }
+
+  return targetPlayerCount === 1
+    ? preparePlanningDay(initializedRoom, initializedRoom.day, balance)
+    : initializedRoom
 }
 
 export function joinRoom(
@@ -393,9 +401,11 @@ export function calculatePurchaseCost(market: Inventory, purchases: Inventory): 
 
 export function customerCountForWeather(
   weather: Weather,
+  playerCount: number = defaultBalanceConfig.maxPlayers,
   balance: BalanceConfig = defaultBalanceConfig,
 ): number {
-  return balance.weatherProfiles[weather].customerCount
+  const baseCount = balance.weatherProfiles[weather].customerCount
+  return Math.max(1, Math.round((baseCount * Math.max(1, playerCount)) / defaultBalanceConfig.maxPlayers))
 }
 
 export function calculateRecipeFit(
@@ -483,7 +493,7 @@ function sampleCustomersForDay(
   balance: BalanceConfig,
 ): [CustomerProfile[], RoomState] {
   const [shuffledRoster, shuffledRoom] = shuffleCustomerRoster(room, room.customerRoster)
-  return [shuffledRoster.slice(0, customerCountForWeather(weather, balance)), shuffledRoom]
+  return [shuffledRoster.slice(0, customerCountForWeather(weather, room.maxPlayers, balance)), shuffledRoom]
 }
 
 function priceScore(price: number, willingnessToPay: number): number {
