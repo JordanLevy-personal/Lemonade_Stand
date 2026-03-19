@@ -45,6 +45,7 @@ const ICE_RECIPE_STEP = 1
 const RECIPE_MAX = 5
 const INVENTORY_PRECISION = 1
 const SATISFACTION_APPROVAL_THRESHOLD = 0.55
+const SALE_TAG_LEAD_IN_MS = 750
 const RECIPE_FEEDBACK_HINT_UPGRADE_ID = 'recipe-feedback-hints'
 const RECIPE_FEEDBACK_HINT_UPGRADE_COST = 25
 const BASE_SIMULATION_SPEED = 1
@@ -776,7 +777,9 @@ function buildSceneStyle(event: CustomerEvent, elapsedMs: number, room: RoomStat
 }
 
 function shouldShowSaleTag(event: CustomerEvent, elapsedMs: number): boolean {
-  return event.outcome === 'buy' && elapsedMs >= event.outcomeAt && elapsedMs <= event.exitAt
+  const saleTagVisibleAt = Math.min(event.outcomeAt, event.exitAt - SALE_TAG_LEAD_IN_MS)
+
+  return event.outcome === 'buy' && elapsedMs >= saleTagVisibleAt && elapsedMs <= event.exitAt
 }
 function purchaseReactionLabel(event: CustomerEvent): string {
   return event.satisfaction >= SATISFACTION_APPROVAL_THRESHOLD ? '👍' : '👎'
@@ -1175,7 +1178,7 @@ function InventoryMetrics({
   return (
     <div className="inventory-group" aria-label={title}>
       <p className="eyebrow">{title}</p>
-      <div className="metric-grid compact-grid">
+      <div className="metric-grid compact-grid inventory-metric-grid">
         <MetricCard label="Lemons" value={`${inventory.lemons}`} />
         <MetricCard label="Sugar" value={`${inventory.sugar}`} />
         <MetricCard label="Ice" value={`${inventory.ice}`} />
@@ -1408,7 +1411,7 @@ function LobbyScreen({
       </div>
 
       <div className="panel-grid">
-        <section className="panel">
+        <section className="panel planning-market-panel">
           <p className="eyebrow">Identity</p>
           <h2>Join the market</h2>
           <div className="field-grid">
@@ -1574,7 +1577,7 @@ function PlanningScreen({
           <MetricCard label="Extra Capacity" value={formatCupDelta(currentCups, projectedCups)} />
         </div>
 
-        <div className="inventory-grid">
+        <div className="inventory-grid planning-inventory-grid">
           <InventoryMetrics title="Current Inventory" inventory={currentPlayer.inventory} />
           <InventoryMetrics title="Projected Inventory" inventory={projectedInventory} />
         </div>
@@ -1586,7 +1589,7 @@ function PlanningScreen({
         <section className="panel">
           <p className="eyebrow">Market</p>
           <h2>Buy ingredients</h2>
-          <div className="buy-field-grid">
+          <div className="buy-field-grid planning-buy-field-grid">
             <div className="buy-field-column">
               <NumberField
                 label={`Lemons @ ${formatMoney(market.lemons)}`}
