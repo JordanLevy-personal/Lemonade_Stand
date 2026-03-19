@@ -41,6 +41,16 @@ export interface DailyResults {
   customersSoldOut: number
 }
 
+export interface PlayerDayHistoryEntry {
+  day: number
+  revenue: number
+  purchaseCost: number
+  profit: number
+  reputationAfter: number
+  cupsSold: number
+  satisfaction: number
+}
+
 export interface MarketBasePrices {
   lemons: number
   sugar: number
@@ -49,14 +59,28 @@ export interface MarketBasePrices {
 
 export type CustomerOutcome = 'buy' | 'skip' | 'soldOut'
 
+export interface CustomerStop {
+  playerId: string
+  arriveAt: number
+  departAt: number
+}
+
 export interface CustomerEvent {
   id: string
-  arrivalOffsetMs: number
+  customerId: string
+  customerIndex: number
+  spawnAt: number
+  outcomeAt: number
+  exitAt: number
+  standStops: CustomerStop[]
   willingnessToPay: number
-  chosenPlayerId: string | null
+  targetPlayerId: string | null
   outcome: CustomerOutcome
   salePrice: number
   satisfaction: number
+  lane: number
+  xJitter: number
+  yJitter: number
 }
 
 export interface RoomSimulation {
@@ -74,6 +98,7 @@ export interface PlayerState {
   reputation: number
   dailyPlan: DailyPlan | null
   dailyResults: DailyResults | null
+  history: PlayerDayHistoryEntry[]
   hasSubmittedPlan: boolean
   connectionStatus: ConnectionStatus
 }

@@ -80,6 +80,7 @@ function createRoom(overrides: Partial<RoomState> = {}): RoomState {
           price: 1.4,
         },
         dailyResults: null,
+        history: [],
       },
       {
         id: 'player-guest',
@@ -108,6 +109,7 @@ function createRoom(overrides: Partial<RoomState> = {}): RoomState {
           price: 1.5,
         },
         dailyResults: null,
+        history: [],
       },
     ],
     ...overrides,
@@ -164,6 +166,36 @@ function getPanelByText(pattern: RegExp): HTMLElement {
 
   return panel as HTMLElement
 }
+
+function createSimulationEvent(
+  overrides: Partial<NonNullable<NonNullable<RoomState['simulation']>['customerEvents']>[number]> = {},
+): NonNullable<NonNullable<RoomState['simulation']>['customerEvents']>[number] {
+  return {
+    id: 'event-a',
+    customerId: 'customer-a',
+    customerIndex: 0,
+    spawnAt: 0,
+    outcomeAt: 1_500,
+    exitAt: 2_000,
+    standStops: [
+      {
+        playerId: 'player-host',
+        arriveAt: 500,
+        departAt: 1_500,
+      },
+    ],
+    targetPlayerId: 'player-host',
+    outcome: 'buy',
+    salePrice: 1.5,
+    satisfaction: 0.8,
+    willingnessToPay: 2,
+    lane: 0,
+    xJitter: 0,
+    yJitter: 0,
+    ...overrides,
+  }
+}
+
 function emitMessage(message: unknown): void {
   act(() => {
     latestHandlers?.onMessage(message as never)
@@ -583,24 +615,28 @@ describe('App', () => {
           durationMs: 6000,
           simulationStartAt: Date.parse('2026-03-16T12:00:00.000Z'),
           customerEvents: [
-            {
-              id: 'event-a',
-              arrivalOffsetMs: 0,
-              willingnessToPay: 2,
-              chosenPlayerId: 'player-host',
-              outcome: 'buy',
-              salePrice: 1.5,
-              satisfaction: 0.8,
-            },
-            {
+            createSimulationEvent(),
+            createSimulationEvent({
               id: 'event-b',
-              arrivalOffsetMs: 400,
-              willingnessToPay: 1,
-              chosenPlayerId: 'player-guest',
+              customerId: 'customer-b',
+              customerIndex: 1,
+              spawnAt: 400,
+              outcomeAt: 2_100,
+              exitAt: 2_600,
+              standStops: [
+                {
+                  playerId: 'player-guest',
+                  arriveAt: 900,
+                  departAt: 1_900,
+                },
+              ],
+              targetPlayerId: 'player-guest',
               outcome: 'skip',
               salePrice: 0,
               satisfaction: 0,
-            },
+              willingnessToPay: 1,
+              lane: 1,
+            }),
           ],
         },
       }),
@@ -696,24 +732,28 @@ describe('App', () => {
             durationMs: 6000,
             simulationStartAt: Date.parse('2026-03-16T12:00:00.000Z'),
             customerEvents: [
-              {
-                id: 'event-a',
-                arrivalOffsetMs: 0,
-                willingnessToPay: 2,
-                chosenPlayerId: 'player-host',
-                outcome: 'buy',
-                salePrice: 1.5,
-                satisfaction: 0.8,
-              },
-              {
+              createSimulationEvent(),
+              createSimulationEvent({
                 id: 'event-b',
-                arrivalOffsetMs: 400,
-                willingnessToPay: 1,
-                chosenPlayerId: 'player-guest',
+                customerId: 'customer-b',
+                customerIndex: 1,
+                spawnAt: 400,
+                outcomeAt: 2_100,
+                exitAt: 2_600,
+                standStops: [
+                  {
+                    playerId: 'player-guest',
+                    arriveAt: 900,
+                    departAt: 1_900,
+                  },
+                ],
+                targetPlayerId: 'player-guest',
                 outcome: 'skip',
                 salePrice: 0,
                 satisfaction: 0,
-              },
+                willingnessToPay: 1,
+                lane: 1,
+              }),
             ],
           },
         },
@@ -734,6 +774,222 @@ describe('App', () => {
     expect(scopedInventory.getByText('2')).toBeInTheDocument()
     expect(scopedInventory.getByText('3')).toBeInTheDocument()
     expect(scopedInventory.getByText('4')).toBeInTheDocument()
+  })
+
+  it('shows a thumbs-up reaction for a satisfied purchase after the stand pause resolves', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-03-16T12:00:00.000Z'))
+
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'simulation_started',
+      simulationStartAt: Date.parse('2026-03-16T12:00:00.000Z'),
+      room: createHostRoom({}, {
+        phase: 'simulating',
+        simulation: {
+          durationMs: 6000,
+          simulationStartAt: Date.parse('2026-03-16T12:00:00.000Z'),
+          customerEvents: [createSimulationEvent()],
+        },
+      }),
+    })
+
+    expect(screen.queryByLabelText(/customer approval reaction/i)).not.toBeInTheDocument()
+
+    act(() => {
+      vi.advanceTimersByTime(1_600)
+    })
+
+    expect(screen.getByLabelText(/customer approval reaction/i)).toBeInTheDocument()
+    expect(screen.getByText('👍')).toBeInTheDocument()
+  })
+
+  it('shows a developer-only simulation speed slider and updates playback speed', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-03-16T12:00:00.000Z'))
+
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'simulation_started',
+      simulationStartAt: Date.parse('2026-03-16T12:00:00.000Z'),
+      room: createHostRoom({}, {
+        phase: 'simulating',
+        simulation: {
+          durationMs: 6000,
+          simulationStartAt: Date.parse('2026-03-16T12:00:00.000Z'),
+          customerEvents: [createSimulationEvent()],
+        },
+      }),
+    })
+
+    const speedSlider = screen.getByRole('slider', { name: /simulation speed/i })
+    expect(speedSlider).toHaveValue('1')
+
+    act(() => {
+      vi.advanceTimersByTime(500)
+    })
+
+    expect(screen.getByLabelText(/timeline: 8%/i)).toBeInTheDocument()
+
+    fireEvent.change(speedSlider, {
+      target: { value: '2' },
+    })
+
+    expect(screen.getByLabelText(/timeline: 17%/i)).toBeInTheDocument()
+  })
+
+  it('spreads customers across the stand width instead of stacking them at one stop point', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-03-16T12:00:00.000Z'))
+
+    const { container } = render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'simulation_started',
+      simulationStartAt: Date.parse('2026-03-16T12:00:00.000Z'),
+      room: createHostRoom({}, {
+        phase: 'simulating',
+        simulation: {
+          durationMs: 6000,
+          simulationStartAt: Date.parse('2026-03-16T12:00:00.000Z'),
+          customerEvents: [
+            createSimulationEvent({
+              id: 'event-a',
+              customerId: 'customer-a',
+              customerIndex: 0,
+              spawnAt: 0,
+              outcomeAt: 1_900,
+              exitAt: 2_800,
+              standStops: [
+                {
+                  playerId: 'player-host',
+                  arriveAt: 900,
+                  departAt: 1_900,
+                },
+              ],
+            }),
+            createSimulationEvent({
+              id: 'event-b',
+              customerId: 'customer-b',
+              customerIndex: 1,
+              spawnAt: 0,
+              outcomeAt: 1_900,
+              exitAt: 2_800,
+              standStops: [
+                {
+                  playerId: 'player-host',
+                  arriveAt: 900,
+                  departAt: 1_900,
+                },
+              ],
+            }),
+          ],
+        },
+      }),
+    })
+
+    act(() => {
+      vi.advanceTimersByTime(1_100)
+    })
+
+    const customers = [...container.querySelectorAll('.crowd-customer')] as HTMLElement[]
+    expect(customers).toHaveLength(2)
+    expect(customers[0]?.style.left).not.toBe(customers[1]?.style.left)
+  })
+
+  it('keeps sold-out customers moving past the stand instead of pausing there', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-03-16T12:00:00.000Z'))
+
+    const { container } = render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'simulation_started',
+      simulationStartAt: Date.parse('2026-03-16T12:00:00.000Z'),
+      room: createHostRoom({}, {
+        phase: 'simulating',
+        simulation: {
+          durationMs: 4000,
+          simulationStartAt: Date.parse('2026-03-16T12:00:00.000Z'),
+          customerEvents: [
+            createSimulationEvent({
+              outcome: 'soldOut',
+              salePrice: 0,
+              satisfaction: 0,
+              outcomeAt: 900,
+              exitAt: 1800,
+              standStops: [
+                {
+                  playerId: 'player-host',
+                  arriveAt: 900,
+                  departAt: 900,
+                },
+              ],
+            }),
+          ],
+        },
+      }),
+    })
+
+    act(() => {
+      vi.advanceTimersByTime(850)
+    })
+
+    const customer = container.querySelector('.crowd-customer') as HTMLElement
+    const leftBeforePassThrough = Number.parseFloat(customer.style.left)
+
+    act(() => {
+      vi.advanceTimersByTime(200)
+    })
+
+    const leftAfterPassThrough = Number.parseFloat(customer.style.left)
+    expect(leftAfterPassThrough).toBeGreaterThan(leftBeforePassThrough)
   })
 
   it('requests the next day from the results screen', () => {
@@ -776,6 +1032,30 @@ describe('App', () => {
                   customersSkipped: 6,
                   customersSoldOut: 0,
                 },
+          history:
+            player.id === 'player-host'
+              ? [
+                  {
+                    day: 1,
+                    revenue: 18,
+                    purchaseCost: 6,
+                    profit: 12,
+                    reputationAfter: 54,
+                    cupsSold: 12,
+                    satisfaction: 0.79,
+                  },
+                ]
+              : [
+                  {
+                    day: 1,
+                    revenue: 13.5,
+                    purchaseCost: 5.5,
+                    profit: 8,
+                    reputationAfter: 51,
+                    cupsSold: 9,
+                    satisfaction: 0.68,
+                  },
+                ],
         })),
       }),
     })
@@ -816,6 +1096,17 @@ describe('App', () => {
             customersSkipped: 3,
             customersSoldOut: 1,
           },
+          history: [
+            {
+              day: 1,
+              revenue: 18,
+              purchaseCost: 6,
+              profit: 12,
+              reputationAfter: 54,
+              cupsSold: 12,
+              satisfaction: 0.79,
+            },
+          ],
         },
         { phase: 'results' },
       ),
@@ -824,6 +1115,68 @@ describe('App', () => {
     expect(screen.getByRole('button', { name: /^next day$/i })).toBeInTheDocument()
     expect(screen.getByText(/start the next day when you are ready/i)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /request next day/i })).not.toBeInTheDocument()
+  })
+
+  it('switches the results chart with metric filter buttons', () => {
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'room_state',
+      room: createRoom({
+        phase: 'results',
+        players: createRoom().players.map((player, index) => ({
+          ...player,
+          dailyResults: {
+            cupsSold: 10 - index,
+            revenue: 18 - index * 4,
+            satisfaction: 0.8 - index * 0.1,
+            reputationDelta: 4 - index,
+            customersWon: 10 - index,
+            customersSkipped: 3 + index,
+            customersSoldOut: index,
+          },
+          history: [
+            {
+              day: 1,
+              revenue: 15 - index * 4,
+              purchaseCost: 5,
+              profit: 10 - index * 4,
+              reputationAfter: 50 + index,
+              cupsSold: 8 - index,
+              satisfaction: 0.7 - index * 0.1,
+            },
+            {
+              day: 2,
+              revenue: 18 - index * 4,
+              purchaseCost: 6,
+              profit: 12 - index * 4,
+              reputationAfter: 54 + index,
+              cupsSold: 10 - index,
+              satisfaction: 0.8 - index * 0.1,
+            },
+          ],
+        })),
+      }),
+    })
+
+    expect(screen.getByRole('heading', { name: /revenue over time/i })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /^profit$/i }))
+    expect(screen.getByRole('heading', { name: /profit over time/i })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /^reputation$/i }))
+    expect(screen.getByRole('heading', { name: /reputation over time/i })).toBeInTheDocument()
   })
 
   it('offers reconnect using the stored room session', () => {
