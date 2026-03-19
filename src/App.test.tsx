@@ -894,8 +894,8 @@ describe('App', () => {
 
     expect(within(alexCard).getByLabelText(/thumbs up feedback count: 1/i)).toBeInTheDocument()
     expect(within(alexCard).getByLabelText(/thumbs down feedback count: 1/i)).toBeInTheDocument()
-    expect(within(alexCard).getByLabelText(/lemons more feedback count: 1/i)).toBeInTheDocument()
     expect(within(alexCard).getByLabelText(/sugar less feedback count: 2/i)).toBeInTheDocument()
+    expect(within(alexCard).queryByLabelText(/lemons more feedback count/i)).not.toBeInTheDocument()
   })
 
   it('renders the simulation scene from a shared start event', () => {
@@ -1132,7 +1132,7 @@ describe('App', () => {
     expect(screen.getByText('👍')).toBeInTheDocument()
   })
 
-  it('shows ingredient-direction hints for an upgraded player during simulation', () => {
+  it('keeps thumbs-up for positive upgraded buys and only shows hint emojis for skip or negative feedback', () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-03-16T12:00:00.000Z'))
 
@@ -1211,9 +1211,10 @@ describe('App', () => {
       vi.advanceTimersByTime(1_700)
     })
 
-    expect(screen.getByLabelText(/recipe feedback hint: lemons more/i)).toBeInTheDocument()
+    expect(screen.getByLabelText(/customer approval reaction/i)).toBeInTheDocument()
+    expect(screen.getByText('👍')).toBeInTheDocument()
     expect(screen.getByLabelText(/recipe feedback hint: sugar less/i)).toBeInTheDocument()
-    expect(screen.queryByLabelText(/customer approval reaction/i)).not.toBeInTheDocument()
+    expect(screen.queryByLabelText(/recipe feedback hint: lemons more/i)).not.toBeInTheDocument()
   })
 
   it('shows a developer-only simulation speed slider and updates playback speed', () => {

@@ -496,12 +496,14 @@ function customerFeedbackBadge({
 }): { content: string; className: string; label: string } | null {
   const eventTargetsCurrentPlayer = currentPlayerId !== null && event.targetPlayerId === currentPlayerId
   const hint = readRecipeFeedbackHint(event)
+  const shouldShowHint =
+    event.outcome === 'skip' || (event.outcome === 'buy' && event.satisfaction < SATISFACTION_APPROVAL_THRESHOLD)
 
   if (elapsedMs < event.outcomeAt) {
     return null
   }
 
-  if (hasHintUpgrade && eventTargetsCurrentPlayer && hint !== null && (event.outcome === 'buy' || event.outcome === 'skip')) {
+  if (hasHintUpgrade && eventTargetsCurrentPlayer && hint !== null && shouldShowHint) {
     return {
       content: `${hintEmojiForIngredient(hint.ingredient)} ${hintDirectionEmoji(hint.direction)}`,
       className: 'reaction-badge reaction-badge-hint',
@@ -558,6 +560,10 @@ function summarizeFeedbackForPlayer({
     }
 
     if (!includeHints || (event.outcome !== 'buy' && event.outcome !== 'skip')) {
+      continue
+    }
+
+    if (event.outcome === 'buy' && event.satisfaction >= SATISFACTION_APPROVAL_THRESHOLD) {
       continue
     }
 
