@@ -185,6 +185,17 @@ function getPanelByText(pattern: RegExp): HTMLElement {
   return panel as HTMLElement
 }
 
+function getFeedbackSummaryCard(name: string): HTMLElement {
+  const panel = getPanelByText(/customer feedback/i)
+  const summaryName = within(panel).getAllByText(name).find((element) => element.closest('.feedback-summary-card') !== null)
+
+  if (summaryName === undefined) {
+    throw new Error(`Unable to find feedback summary card for ${name}`)
+  }
+
+  return summaryName.closest('.feedback-summary-card') as HTMLElement
+}
+
 function createSimulationEvent(
   overrides: Partial<TestSimulationEvent> = {},
 ): TestSimulationEvent {
@@ -253,6 +264,103 @@ function createHintedSimulationRoom(
       ],
     },
     ...roomOverrides,
+  })
+}
+
+function createResultsRoom(overrides: Partial<RoomState> = {}): RoomState {
+  return createOwnedHintRoom({
+    phase: 'results',
+    simulation: {
+      durationMs: 6000,
+      simulationStartAt: Date.parse('2026-03-16T12:00:00.000Z'),
+      customerEvents: [
+        createSimulationEvent({
+          id: 'event-up',
+          customerId: 'customer-up',
+          targetPlayerId: 'player-host',
+          outcome: 'buy',
+          satisfaction: 0.8,
+          recipeFeedbackHint: {
+            ingredient: 'lemons',
+            direction: 'more',
+          },
+        }),
+        createSimulationEvent({
+          id: 'event-down',
+          customerId: 'customer-down',
+          customerIndex: 1,
+          targetPlayerId: 'player-host',
+          outcome: 'buy',
+          satisfaction: 0.3,
+          recipeFeedbackHint: {
+            ingredient: 'sugar',
+            direction: 'less',
+          },
+        }),
+        createSimulationEvent({
+          id: 'event-skip',
+          customerId: 'customer-skip',
+          customerIndex: 2,
+          targetPlayerId: 'player-host',
+          outcome: 'skip',
+          salePrice: 0,
+          satisfaction: 0,
+          recipeFeedbackHint: {
+            ingredient: 'sugar',
+            direction: 'less',
+          },
+        }),
+      ],
+    },
+    players: [
+      {
+        ...createOwnedHintRoom().players[0],
+        dailyResults: {
+          cupsSold: 2,
+          revenue: 3,
+          satisfaction: 0.55,
+          reputationDelta: 1,
+          customersWon: 2,
+          customersSkipped: 1,
+          customersSoldOut: 0,
+        },
+        history: [
+          {
+            day: 1,
+            revenue: 2.2,
+            purchaseCost: 1.1,
+            profit: 1.1,
+            reputationAfter: 51,
+            cupsSold: 2,
+            satisfaction: 0.65,
+          },
+        ],
+      } as TestPlayerState,
+      {
+        ...createOwnedHintRoom().players[1],
+        dailyResults: {
+          cupsSold: 1,
+          revenue: 1.7,
+          satisfaction: 0.8,
+          reputationDelta: 2,
+          customersWon: 1,
+          customersSkipped: 2,
+          customersSoldOut: 0,
+        },
+        history: [
+          {
+            day: 1,
+            revenue: 1.7,
+            purchaseCost: 1,
+            profit: 0.7,
+            reputationAfter: 52,
+            cupsSold: 1,
+            satisfaction: 0.8,
+          },
+        ],
+      } as TestPlayerState,
+    ],
+    ...overrides,
   })
 }
 
@@ -668,8 +776,11 @@ describe('App', () => {
       room: createRoom(),
     })
 
-    expect(screen.getByLabelText(/status: need \$5\.00/i)).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /buy for \$25\.00/i })).toBeDisabled()
+    expect(screen.getByRole('heading', { name: /upgrades/i })).toBeInTheDocument()
+    expect(screen.getByText(/show one emoji hint after your buys and skips/i)).toBeInTheDocument()
+    expect(screen.getByLabelText(/recipe feedback hints status: need \$5\.00/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^buy$/i })).toBeDisabled()
+    expect(screen.getByText(/\$25\.00/)).toBeInTheDocument()
   })
 
   it('allows buying the recipe feedback hint upgrade during planning', () => {
@@ -699,7 +810,7 @@ describe('App', () => {
       }),
     })
 
-    fireEvent.click(screen.getByRole('button', { name: /buy for \$25\.00/i }))
+    fireEvent.click(screen.getByRole('button', { name: /^buy$/i }))
 
     expect(sendMock).toHaveBeenLastCalledWith({
       type: 'purchase_upgrade',
@@ -730,9 +841,61 @@ describe('App', () => {
       }),
     })
 
-    expect(screen.getByLabelText(/status: owned/i)).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /upgrade owned/i })).toBeDisabled()
-    expect(screen.getByText(/hints stay active for the rest of the run/i)).toBeInTheDocument()
+    expect(screen.getByLabelText(/recipe feedback hints status: owned/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^owned$/i })).toBeDisabled()
+    expect(screen.getByText(/show one emoji hint after your buys and skips/i)).toBeInTheDocument()
+  })
+
+  it('shows explicit thumbs-up and thumbs-down counts in results', () => {
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'room_state',
+      room: createResultsRoom(),
+    })
+
+    const alexCard = getFeedbackSummaryCard('Alex')
+
+    expect(within(alexCard).getByLabelText(/thumbs up feedback count: 1/i)).toBeInTheDocument()
+    expect(within(alexCard).getByLabelText(/thumbs down feedback count: 1/i)).toBeInTheDocument()
+  })
+
+  it('shows upgraded hint counts in addition to the base thumbs summary', () => {
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'room_state',
+      room: createResultsRoom(),
+    })
+
+    const alexCard = getFeedbackSummaryCard('Alex')
+
+    expect(within(alexCard).getByLabelText(/thumbs up feedback count: 1/i)).toBeInTheDocument()
+    expect(within(alexCard).getByLabelText(/thumbs down feedback count: 1/i)).toBeInTheDocument()
+    expect(within(alexCard).getByLabelText(/lemons more feedback count: 1/i)).toBeInTheDocument()
+    expect(within(alexCard).getByLabelText(/sugar less feedback count: 2/i)).toBeInTheDocument()
   })
 
   it('renders the simulation scene from a shared start event', () => {

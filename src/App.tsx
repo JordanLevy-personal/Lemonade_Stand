@@ -72,6 +72,13 @@ interface CustomerFeedbackEvent extends CustomerEvent {
   recipeFeedbackHint?: RecipeFeedbackHint
 }
 
+interface FeedbackChipDefinition {
+  key: string
+  label: string
+  symbol: string
+  count: number
+}
+
 interface StoredRoomSession {
   roomId: string
   playerId: string
@@ -436,6 +443,10 @@ function hintDirectionLabel(direction: RecipeFeedbackHintDirection): string {
   return direction === 'more' ? 'more' : 'less'
 }
 
+function hintSymbol(hint: RecipeFeedbackHint): string {
+  return `${hintEmojiForIngredient(hint.ingredient)} ${hintDirectionEmoji(hint.direction)}`
+}
+
 function readRecipeFeedbackHint(event: CustomerEvent): RecipeFeedbackHint | null {
   const hintedEvent = event as CustomerFeedbackEvent
 
@@ -518,6 +529,79 @@ function formatSignedNumber(value: number): string {
 
 function latestHistoryEntry(player: RoomState['players'][number]) {
   return player.history[player.history.length - 1] ?? null
+}
+
+function summarizeFeedbackForPlayer({
+  room,
+  playerId,
+  includeHints,
+}: {
+  room: RoomState
+  playerId: string
+  includeHints: boolean
+}): { baseCounts: FeedbackChipDefinition[]; hintCounts: FeedbackChipDefinition[] } {
+  let thumbsUp = 0
+  let thumbsDown = 0
+  const hintCounts = new Map<string, FeedbackChipDefinition>()
+
+  for (const event of room.simulation?.customerEvents ?? []) {
+    if (event.targetPlayerId !== playerId) {
+      continue
+    }
+
+    if (event.outcome === 'buy') {
+      if (event.satisfaction >= SATISFACTION_APPROVAL_THRESHOLD) {
+        thumbsUp += 1
+      } else {
+        thumbsDown += 1
+      }
+    }
+
+    if (!includeHints || (event.outcome !== 'buy' && event.outcome !== 'skip')) {
+      continue
+    }
+
+    const hint = readRecipeFeedbackHint(event)
+    if (hint === null) {
+      continue
+    }
+
+    const key = `${hint.ingredient}:${hint.direction}`
+    const existing = hintCounts.get(key)
+
+    if (existing === undefined) {
+      hintCounts.set(key, {
+        key,
+        label: `${hint.ingredient} ${hintDirectionLabel(hint.direction)}`,
+        symbol: hintSymbol(hint),
+        count: 1,
+      })
+      continue
+    }
+
+    hintCounts.set(key, {
+      ...existing,
+      count: existing.count + 1,
+    })
+  }
+
+  return {
+    baseCounts: [
+      {
+        key: 'thumbs-up',
+        label: 'thumbs up',
+        symbol: '👍',
+        count: thumbsUp,
+      },
+      {
+        key: 'thumbs-down',
+        label: 'thumbs down',
+        symbol: '👎',
+        count: thumbsDown,
+      },
+    ],
+    hintCounts: [...hintCounts.values()],
+  }
 }
 
 function chartTitle(metric: ResultsChartMetric): string {
@@ -614,7 +698,7 @@ function InventoryMetrics({
   )
 }
 
-function HintUpgradePanel({
+function UpgradeFeedbackRow({
   currentPlayer,
   onPurchaseUpgrade,
 }: {
@@ -626,31 +710,22 @@ function HintUpgradePanel({
   const missingMoney = Math.max(0, RECIPE_FEEDBACK_HINT_UPGRADE_COST - currentPlayer.money)
   const buttonDisabled = hasUpgrade || !canAfford || currentPlayer.hasSubmittedPlan
 
+  const status = hasUpgrade
+    ? 'Owned'
+    : currentPlayer.hasSubmittedPlan
+      ? 'Locked'
+      : canAfford
+        ? 'Ready'
+        : `Need ${formatMoney(missingMoney)}`
+
   return (
-    <section className="panel upgrade-panel">
-      <p className="eyebrow">Upgrade</p>
-      <h2>Recipe feedback hints</h2>
-      <p className="muted">
-        Buy this once to reveal the biggest recipe delta after your own buys and skips. It stays active for the rest of the run.
-      </p>
-
-      <div className="metric-grid compact-grid">
-        <MetricCard label="Cost" value={formatMoney(RECIPE_FEEDBACK_HINT_UPGRADE_COST)} />
-        <MetricCard
-          label="Status"
-          value={
-            hasUpgrade
-              ? 'Owned'
-              : currentPlayer.hasSubmittedPlan
-                ? 'Plan locked'
-              : canAfford
-                ? 'Ready to buy'
-                : `Need ${formatMoney(missingMoney)}`
-          }
-        />
+    <article className="upgrade-item">
+      <div className="upgrade-copy">
+        <p className="upgrade-name">Recipe feedback hints</p>
+        <p className="muted upgrade-description">Show one emoji hint after your buys and skips.</p>
       </div>
-
-      <div className="action-row">
+      <div className="upgrade-actions">
+        <span className="upgrade-cost">{formatMoney(RECIPE_FEEDBACK_HINT_UPGRADE_COST)}</span>
         <button
           className="action-button action-button-secondary"
           disabled={buttonDisabled}
@@ -658,20 +733,85 @@ function HintUpgradePanel({
           type="button"
         >
           {hasUpgrade
-            ? 'Upgrade owned'
+            ? 'Owned'
             : currentPlayer.hasSubmittedPlan
-              ? 'Plan locked'
-              : `Buy for ${formatMoney(RECIPE_FEEDBACK_HINT_UPGRADE_COST)}`}
+              ? 'Locked'
+              : 'Buy'}
         </button>
-        <p className="muted">
-          {hasUpgrade
-            ? 'Hints stay active for the rest of the run.'
-            : currentPlayer.hasSubmittedPlan
-              ? 'Lock in your plan first; upgrade purchases close once the day is submitted.'
-            : canAfford
-              ? 'Unlock ingredient-and-direction feedback for your own customers.'
-              : `You need ${formatMoney(missingMoney)} more before buying this upgrade.`}
-        </p>
+        <span
+          aria-label={`recipe feedback hints status: ${status.toLowerCase()}`}
+          className="upgrade-status"
+        >
+          {status}
+        </span>
+      </div>
+    </article>
+  )
+}
+
+function UpgradesPanel({
+  currentPlayer,
+  onPurchaseUpgrade,
+}: {
+  currentPlayer: NonNullable<ReturnType<typeof findCurrentPlayer>>
+  onPurchaseUpgrade: () => void
+}): JSX.Element {
+  return (
+    <section className="panel upgrade-panel">
+      <p className="eyebrow">Planning</p>
+      <h2>Upgrades</h2>
+      <div className="upgrade-list">
+        <UpgradeFeedbackRow currentPlayer={currentPlayer} onPurchaseUpgrade={onPurchaseUpgrade} />
+      </div>
+    </section>
+  )
+}
+
+function FeedbackCountPill({ chip }: { chip: FeedbackChipDefinition }): JSX.Element {
+  return (
+    <span aria-label={`${chip.label} feedback count: ${chip.count}`} className="feedback-count-pill">
+      <span className="feedback-count-symbol" aria-hidden="true">
+        {chip.symbol}
+      </span>
+      <strong>{chip.count}</strong>
+    </span>
+  )
+}
+
+function ResultsFeedbackSummary({
+  room,
+  currentPlayerId,
+}: {
+  room: RoomState
+  currentPlayerId: string | null
+}): JSX.Element {
+  return (
+    <section className="panel feedback-summary-panel">
+      <p className="eyebrow">Customer Feedback</p>
+      <div className="feedback-summary-grid">
+        {room.players.map((player) => {
+          const showHintCounts =
+            currentPlayerId === player.id && isRecipeFeedbackHintUpgradeOwned(player)
+          const summary = summarizeFeedbackForPlayer({
+            room,
+            playerId: player.id,
+            includeHints: showHintCounts,
+          })
+
+          return (
+            <article className="feedback-summary-card" key={player.id}>
+              <p className="feedback-summary-name">{player.name}</p>
+              <div className="summary-chip-row">
+                {summary.baseCounts.map((chip) => (
+                  <FeedbackCountPill chip={chip} key={chip.key} />
+                ))}
+                {summary.hintCounts.map((chip) => (
+                  <FeedbackCountPill chip={chip} key={chip.key} />
+                ))}
+              </div>
+            </article>
+          )
+        })}
       </div>
     </section>
   )
@@ -944,7 +1084,7 @@ function PlanningScreen({
       </section>
 
       <div className="panel-grid">
-        <HintUpgradePanel currentPlayer={currentPlayer} onPurchaseUpgrade={onPurchaseUpgrade} />
+        <UpgradesPanel currentPlayer={currentPlayer} onPurchaseUpgrade={onPurchaseUpgrade} />
 
         <section className="panel">
           <p className="eyebrow">Market</p>
@@ -1265,6 +1405,8 @@ function ResultsScreen({
           </section>
         ))}
       </div>
+
+      <ResultsFeedbackSummary currentPlayerId={currentPlayerId} room={room} />
 
       <section className="panel">
         <p className="eyebrow">History</p>
