@@ -7,6 +7,7 @@ import Customer2Sprite from './assets/customers/customer_2.png'
 import StandSprite from './assets/stand.png'
 import { defaultBalanceConfig } from './game/balance'
 import {
+  calculatePerIngredientCapacity,
   calculatePurchaseCost,
   calculateSellableCups,
   emptyInventory,
@@ -559,6 +560,10 @@ function PlanningScreen({
   const projectedInventory = addInventory(currentPlayer.inventory, localPlan.purchases)
   const projectedCups = calculateSellableCups(projectedInventory, localPlan.recipe)
   const canAfford = spend <= currentPlayer.money
+  const cashRemaining = roundToPrecision(currentPlayer.money - spend, 2)
+  const margin = roundToPrecision(localPlan.price - cupCost, 2)
+  const perIngredientCups = calculatePerIngredientCapacity(projectedInventory, localPlan.recipe)
+  const bottleneckCups = Math.min(perIngredientCups.lemons, perIngredientCups.sugar, perIngredientCups.ice)
 
   return (
     <section className="app-stage">
@@ -581,16 +586,9 @@ function PlanningScreen({
       </div>
 
       <section className="panel sales-forecast-panel">
-        <div className="panel-header">
-          <div>
-            <p className="eyebrow">Inventory</p>
-            <h2>Stock and cup forecast</h2>
-          </div>
-          <div className="summary-chip-row">
-            <span className="summary-chip">Spend plan {formatMoney(spend)}</span>
-            <span className="summary-chip">Ingredient cost/cup {formatMoney(cupCost)}</span>
-            <span className="summary-chip">Projected stock {formatCupCapacity(projectedCups)}</span>
-          </div>
+        <div>
+          <p className="eyebrow">Inventory</p>
+          <h2>Stock and cup forecast</h2>
         </div>
 
         <div className="forecast-grid">
@@ -598,11 +596,6 @@ function PlanningScreen({
           <MetricCard label="After Shopping" value={formatCupCapacity(projectedCups)} />
           <MetricCard label="Extra Capacity" value={formatCupDelta(currentCups, projectedCups)} />
         </div>
-
-        <p className="forecast-copy">
-          <strong>{formatCupCapacity(currentCups)}</strong> from current inventory.{' '}
-          <strong>{formatCupCapacity(projectedCups)}</strong> after shopping.
-        </p>
 
         <div className="inventory-grid">
           <InventoryMetrics title="Current Inventory" inventory={currentPlayer.inventory} />
@@ -614,44 +607,60 @@ function PlanningScreen({
         <section className="panel">
           <p className="eyebrow">Market</p>
           <h2>Buy ingredients</h2>
-          <div className="metric-grid compact-grid">
-            <MetricCard label="Lemons" value={formatMoney(market.lemons)} />
-            <MetricCard label="Sugar" value={formatMoney(market.sugar)} />
-            <MetricCard label="Ice" value={formatMoney(market.ice)} />
+          <div className="buy-field-grid">
+            <div className="buy-field-column">
+              <NumberField
+                label={`Lemons @ ${formatMoney(market.lemons)}`}
+                value={localPlan.purchases.lemons}
+                onChange={(lemons) =>
+                  onPlanChange({
+                    ...localPlan,
+                    purchases: { ...localPlan.purchases, lemons },
+                  })
+                }
+              />
+              <span className={`capacity-hint${perIngredientCups.lemons === bottleneckCups && Number.isFinite(bottleneckCups) ? ' bottleneck-indicator' : ''}`}>
+                {Number.isFinite(perIngredientCups.lemons) ? `→ ${perIngredientCups.lemons} cups` : '→ Unlimited'}
+                {perIngredientCups.lemons === bottleneckCups && Number.isFinite(bottleneckCups) ? ' (limiting)' : ''}
+              </span>
+            </div>
+            <div className="buy-field-column">
+              <NumberField
+                label={`Sugar @ ${formatMoney(market.sugar)}`}
+                value={localPlan.purchases.sugar}
+                onChange={(sugar) =>
+                  onPlanChange({
+                    ...localPlan,
+                    purchases: { ...localPlan.purchases, sugar },
+                  })
+                }
+              />
+              <span className={`capacity-hint${perIngredientCups.sugar === bottleneckCups && Number.isFinite(bottleneckCups) ? ' bottleneck-indicator' : ''}`}>
+                {Number.isFinite(perIngredientCups.sugar) ? `→ ${perIngredientCups.sugar} cups` : '→ Unlimited'}
+                {perIngredientCups.sugar === bottleneckCups && Number.isFinite(bottleneckCups) ? ' (limiting)' : ''}
+              </span>
+            </div>
+            <div className="buy-field-column">
+              <NumberField
+                label={`Ice @ ${formatMoney(market.ice)}`}
+                value={localPlan.purchases.ice}
+                onChange={(ice) =>
+                  onPlanChange({
+                    ...localPlan,
+                    purchases: { ...localPlan.purchases, ice },
+                  })
+                }
+              />
+              <span className={`capacity-hint${perIngredientCups.ice === bottleneckCups && Number.isFinite(bottleneckCups) ? ' bottleneck-indicator' : ''}`}>
+                {Number.isFinite(perIngredientCups.ice) ? `→ ${perIngredientCups.ice} cups` : '→ Unlimited'}
+                {perIngredientCups.ice === bottleneckCups && Number.isFinite(bottleneckCups) ? ' (limiting)' : ''}
+              </span>
+            </div>
           </div>
-          <div className="field-grid">
-            <NumberField
-              label="Buy Lemons"
-              value={localPlan.purchases.lemons}
-              onChange={(lemons) =>
-                onPlanChange({
-                  ...localPlan,
-                  purchases: { ...localPlan.purchases, lemons },
-                })
-              }
-            />
-            <NumberField
-              label="Buy Sugar"
-              value={localPlan.purchases.sugar}
-              onChange={(sugar) =>
-                onPlanChange({
-                  ...localPlan,
-                  purchases: { ...localPlan.purchases, sugar },
-                })
-              }
-            />
-            <NumberField
-              label="Buy Ice"
-              value={localPlan.purchases.ice}
-              onChange={(ice) =>
-                onPlanChange({
-                  ...localPlan,
-                  purchases: { ...localPlan.purchases, ice },
-                })
-              }
-            />
+          <div className={`shopping-summary${!canAfford ? ' overspend-warning' : ''}`}>
+            <span>Spend: {formatMoney(spend)}</span>
+            <span>Cash remaining: {formatMoney(cashRemaining)}</span>
           </div>
-          <p className="muted">Shopping basket: {formatMoney(spend)}</p>
         </section>
 
         <section className="panel">
@@ -697,12 +706,18 @@ function PlanningScreen({
                 })
               }
             />
+          </div>
+          <div className="price-row">
             <NumberField
               label="Price per Cup"
               value={localPlan.price}
               step={0.05}
               onChange={(price) => onPlanChange({ ...localPlan, price })}
             />
+            <span className="price-context">Cost/cup: {formatMoney(cupCost)}</span>
+            <span className={`price-context${margin < 0 ? ' margin-negative' : ''}`}>
+              Margin: {formatMoney(margin)}
+            </span>
           </div>
           <div className="action-row">
             <button

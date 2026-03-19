@@ -391,6 +391,24 @@ export function calculateSellableCups(inventory: Inventory, recipe: Recipe): num
   return Math.max(0, Math.min(...capacities))
 }
 
+export function calculatePerIngredientCapacity(
+  inventory: Inventory,
+  recipe: Recipe,
+): Inventory {
+  function _capacityFor(ingredient: keyof Inventory): number {
+    if (recipe[ingredient] <= 0) {
+      return Number.POSITIVE_INFINITY
+    }
+    return Math.floor((inventory[ingredient] + INVENTORY_EPSILON) / recipe[ingredient])
+  }
+
+  return {
+    lemons: _capacityFor('lemons'),
+    sugar: _capacityFor('sugar'),
+    ice: _capacityFor('ice'),
+  }
+}
+
 export function calculatePurchaseCost(market: Inventory, purchases: Inventory): number {
   return roundMoney(
     purchases.lemons * market.lemons +
