@@ -646,6 +646,7 @@ describe('App', () => {
     expect(screen.getByText(/shared timeline live/i)).toBeInTheDocument()
     expect(screen.getAllByText(/alex/i).length).toBeGreaterThan(0)
     expect(screen.getAllByText(/blair/i).length).toBeGreaterThan(0)
+    expect(screen.getByLabelText(/time: 11:20 am/i)).toBeInTheDocument()
   })
 
   it('shows only one stand during a singleplayer simulation', () => {
@@ -683,6 +684,47 @@ describe('App', () => {
 
     expect(screen.getByAltText(/alex stand/i)).toBeInTheDocument()
     expect(screen.queryByText(/blair/i)).not.toBeInTheDocument()
+    expect(screen.getByLabelText(/time: 11:20 am/i)).toBeInTheDocument()
+  })
+
+  it('renders the simulation business clock from 8:00 AM through 6:00 PM', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-03-16T12:00:00.000Z'))
+
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'simulation_started',
+      simulationStartAt: Date.parse('2026-03-16T12:00:00.000Z'),
+      room: createHostRoom({}, {
+        phase: 'simulating',
+        simulation: {
+          durationMs: 6000,
+          simulationStartAt: Date.parse('2026-03-16T12:00:00.000Z'),
+          customerEvents: [],
+        },
+      }),
+    })
+
+    expect(screen.getByLabelText(/time: 8:00 am/i)).toBeInTheDocument()
+    expect(screen.queryByLabelText(/timeline:/i)).not.toBeInTheDocument()
+
+    act(() => {
+      vi.advanceTimersByTime(6000)
+    })
+
+    expect(screen.getByLabelText(/time: 6:00 pm/i)).toBeInTheDocument()
   })
 
   it('depletes the current player inventory as simulation sales resolve', () => {
@@ -892,13 +934,185 @@ describe('App', () => {
       vi.advanceTimersByTime(500)
     })
 
-    expect(screen.getByLabelText(/timeline: 8%/i)).toBeInTheDocument()
+    expect(screen.getByLabelText(/time: 8:50 am/i)).toBeInTheDocument()
 
     fireEvent.change(speedSlider, {
       target: { value: '2' },
     })
 
-    expect(screen.getByLabelText(/timeline: 17%/i)).toBeInTheDocument()
+    expect(screen.getByLabelText(/time: 9:40 am/i)).toBeInTheDocument()
+  })
+
+  it('lets developer mode override the simulation weather visuals locally', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-03-16T12:00:00.000Z'))
+
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'simulation_started',
+      simulationStartAt: Date.parse('2026-03-16T12:00:00.000Z'),
+      room: createHostRoom({}, {
+        phase: 'simulating',
+        weather: 'hot',
+        simulation: {
+          durationMs: 6000,
+          simulationStartAt: Date.parse('2026-03-16T12:00:00.000Z'),
+          customerEvents: [],
+        },
+      }),
+    })
+
+    const weatherOverride = screen.getByLabelText(/weather override/i)
+    expect(weatherOverride).toHaveValue('live')
+    expect(screen.getByLabelText(/weather: hot/i)).toBeInTheDocument()
+
+    fireEvent.change(weatherOverride, {
+      target: { value: 'raining' },
+    })
+
+    const scene = screen.getByRole('img', { name: /simulation scene/i })
+
+    expect(screen.getByLabelText(/weather: raining/i)).toBeInTheDocument()
+    expect(scene).toHaveAttribute('data-weather', 'raining')
+    expect(scene.querySelectorAll('.crowd-rain-drop').length).toBeGreaterThan(10)
+    expect(screen.getByText(/currently overridden to raining/i)).toBeInTheDocument()
+  })
+
+  it('exposes simulation scene state for sunny mornings', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-03-16T12:00:00.000Z'))
+
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'simulation_started',
+      simulationStartAt: Date.parse('2026-03-16T12:00:00.000Z'),
+      room: createHostRoom({}, {
+        phase: 'simulating',
+        weather: 'sunny',
+        simulation: {
+          durationMs: 6000,
+          simulationStartAt: Date.parse('2026-03-16T12:00:00.000Z'),
+          customerEvents: [],
+        },
+      }),
+    })
+
+    const scene = screen.getByRole('img', { name: /simulation scene/i })
+
+    expect(scene).toHaveAttribute('data-weather', 'sunny')
+    expect(scene).toHaveAttribute('data-time-of-day', 'morning')
+    expect(scene).toHaveAccessibleName(/sunny/i)
+    expect(scene).toHaveAccessibleName(/8:00 am/i)
+    expect(scene.querySelectorAll('.crowd-rain-drop')).toHaveLength(0)
+  })
+
+  it('exposes simulation scene state for rainy dusk', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-03-16T12:00:00.000Z'))
+
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'simulation_started',
+      simulationStartAt: Date.parse('2026-03-16T12:00:00.000Z'),
+      room: createHostRoom({}, {
+        phase: 'simulating',
+        weather: 'raining',
+        simulation: {
+          durationMs: 6000,
+          simulationStartAt: Date.parse('2026-03-16T12:00:00.000Z'),
+          customerEvents: [],
+        },
+      }),
+    })
+
+    act(() => {
+      vi.advanceTimersByTime(6000)
+    })
+
+    const scene = screen.getByRole('img', { name: /simulation scene/i })
+
+    expect(scene).toHaveAttribute('data-weather', 'raining')
+    expect(scene).toHaveAttribute('data-time-of-day', 'dusk')
+    expect(scene).toHaveAccessibleName(/raining/i)
+    expect(scene).toHaveAccessibleName(/6:00 pm/i)
+    expect(scene.querySelectorAll('.crowd-rain-drop').length).toBeGreaterThan(10)
+  })
+
+  it('adds extra cloud cover for cloudy simulations', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-03-16T12:00:00.000Z'))
+
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'simulation_started',
+      simulationStartAt: Date.parse('2026-03-16T12:00:00.000Z'),
+      room: createHostRoom({}, {
+        phase: 'simulating',
+        weather: 'cloudy',
+        simulation: {
+          durationMs: 6000,
+          simulationStartAt: Date.parse('2026-03-16T12:00:00.000Z'),
+          customerEvents: [],
+        },
+      }),
+    })
+
+    const scene = screen.getByRole('img', { name: /simulation scene/i })
+    const clouds = [...scene.querySelectorAll('.crowd-cloud')] as HTMLElement[]
+
+    expect(scene).toHaveAttribute('data-weather', 'cloudy')
+    expect(clouds.length).toBeGreaterThanOrEqual(6)
+    for (const cloud of clouds) {
+      expect(Number.parseFloat(cloud.style.getPropertyValue('--cloud-top'))).toBeLessThan(22)
+    }
   })
 
   it('keeps rendering customers late in the timeline when events spawn near the end', () => {
@@ -950,7 +1164,7 @@ describe('App', () => {
       vi.advanceTimersByTime(5_400)
     })
 
-    expect(screen.getByLabelText(/timeline: 90%/i)).toBeInTheDocument()
+    expect(screen.getByLabelText(/time: 5:00 pm/i)).toBeInTheDocument()
     expect(container.querySelectorAll('.crowd-customer')).toHaveLength(1)
   })
 
