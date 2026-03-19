@@ -106,7 +106,7 @@
 .price-row {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
+  align-items: flex-end;
   gap: 0.75rem;
   margin-top: 0.5rem;
 }
@@ -120,6 +120,7 @@
   font-size: 0.85rem;
   color: rgba(29, 74, 79, 0.72);
   white-space: nowrap;
+  margin-bottom: 0.75rem;
 }
 
 .margin-negative {
