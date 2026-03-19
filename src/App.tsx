@@ -29,6 +29,7 @@ import type {
   FactionDefinition,
   GameMode,
   RoomState,
+  RunLengthDays,
   SimulationStartedMessage,
   Weather,
 } from './client/protocol'
@@ -124,6 +125,7 @@ interface LobbyForm {
   name: string
   roomId: string
   factionId: string
+  runLengthDays: RunLengthDays
 }
 
 function readStoredRoomSession(): StoredRoomSession | null {
@@ -186,6 +188,44 @@ function factionDefinition(factionId: string): FactionDefinition {
 
 function formatMoney(value: number): string {
   return `$${value.toFixed(2)}`
+}
+
+function parseRunLengthDays(value: string): RunLengthDays {
+  return value === '30' ? 30 : 14
+}
+
+function winnerNames(room: RoomState): string[] {
+  if (room.finalOutcome === null) {
+    return []
+  }
+
+  return room.finalOutcome.winnerPlayerIds
+    .map((playerId) => room.players.find((player) => player.id === playerId)?.name ?? null)
+    .filter((name): name is string => name !== null)
+}
+
+function finalOutcomeCopy(room: RoomState): string {
+  if (!room.isGameComplete) {
+    return room.targetPlayerCount === 1
+      ? 'Review your stand results, then continue when you are ready.'
+      : 'Compare both stands, then request the next day when everyone is ready to keep playing.'
+  }
+
+  if (room.targetPlayerCount === 1) {
+    return `Your ${room.runLengthDays}-day run is complete. Review your final cash and reputation below.`
+  }
+
+  const winners = winnerNames(room)
+
+  if (room.finalOutcome?.decidedBy === 'draw') {
+    return `It is a draw. ${winners.join(' and ')} finished tied on money and reputation.`
+  }
+
+  if (room.finalOutcome?.decidedBy === 'reputation') {
+    return `${winners[0] ?? 'The winner'} wins on reputation after a cash tie.`
+  }
+
+  return `${winners[0] ?? 'The winner'} wins with the most money after ${room.runLengthDays} days.`
 }
 
 function numberValue(input: string): number {
@@ -924,6 +964,17 @@ function LobbyScreen({
                 ))}
               </select>
             </label>
+            <label className="field">
+              <span className="field-label">Run Length</span>
+              <select
+                className="field-input"
+                value={form.runLengthDays}
+                onChange={(event) => onChange({ runLengthDays: parseRunLengthDays(event.target.value) })}
+              >
+                <option value={14}>14 Days</option>
+                <option value={30}>30 Days</option>
+              </select>
+            </label>
           </div>
           <div className="action-row">
             <button className="action-button action-button-primary" onClick={onHost}>
@@ -1433,13 +1484,9 @@ function ResultsScreen({
   return (
     <section className="app-stage">
       <div className="panel hero-panel">
-        <p className="eyebrow">Results phase</p>
-        <h1>Market Results</h1>
-        <p className="muted">
-          {isSingleplayerRoom
-            ? 'Review your stand results, then continue when you are ready.'
-            : 'Compare both stands, then request the next day when everyone is ready to keep playing.'}
-        </p>
+        <p className="eyebrow">{room.isGameComplete ? 'Final results' : 'Results phase'}</p>
+        <h1>{room.isGameComplete ? 'Run Complete' : 'Market Results'}</h1>
+        <p className="muted">{finalOutcomeCopy(room)}</p>
       </div>
 
       <div className="panel-grid">
@@ -1455,6 +1502,12 @@ function ResultsScreen({
               <MetricCard label="Satisfaction" value={`${Math.round((player.dailyResults?.satisfaction ?? 0) * 100)}%`} />
               <MetricCard label="Rep Change" value={formatSignedNumber(player.dailyResults?.reputationDelta ?? 0)} />
             </div>
+            {room.isGameComplete ? (
+              <div className="metric-grid compact-grid">
+                <MetricCard label="Final Cash" value={formatMoney(player.money)} />
+                <MetricCard label="Final Reputation" value={`${player.reputation}`} />
+              </div>
+            ) : null}
           </section>
         ))}
       </div>
@@ -1518,24 +1571,34 @@ function ResultsScreen({
         )}
       </section>
 
-      <div className="panel">
-        <button
-          className="action-button action-button-primary"
-          disabled={hasRequestedNextDay}
-          onClick={onNextDay}
-        >
-          {isSingleplayerRoom ? 'Next Day' : 'Request Next Day'}
-        </button>
-        <p className="muted">
-          {hasRequestedNextDay
-            ? isSingleplayerRoom
-              ? 'Loading the next day...'
-              : 'Next day requested. Waiting on the other stand.'
-            : isSingleplayerRoom
-              ? 'Start the next day when you are ready.'
-              : 'Request the next day when you are ready to keep playing.'}
-        </p>
-      </div>
+      {room.isGameComplete ? (
+        <div className="panel">
+          <p className="muted">
+            {isSingleplayerRoom
+              ? 'This run is finished. Start a new run from the lobby when you want another market.'
+              : 'This run is finished. Create a new room from the lobby when you want another market showdown.'}
+          </p>
+        </div>
+      ) : (
+        <div className="panel">
+          <button
+            className="action-button action-button-primary"
+            disabled={hasRequestedNextDay}
+            onClick={onNextDay}
+          >
+            {isSingleplayerRoom ? 'Next Day' : 'Request Next Day'}
+          </button>
+          <p className="muted">
+            {hasRequestedNextDay
+              ? isSingleplayerRoom
+                ? 'Loading the next day...'
+                : 'Next day requested. Waiting on the other stand.'
+              : isSingleplayerRoom
+                ? 'Start the next day when you are ready.'
+                : 'Request the next day when you are ready to keep playing.'}
+          </p>
+        </div>
+      )}
     </section>
   )
 }
@@ -1562,6 +1625,7 @@ function App(): JSX.Element {
     name: reconnectSession?.name ?? searchParam('name') ?? '',
     roomId: reconnectSession?.roomId ?? searchParam('roomId') ?? '',
     factionId: reconnectSession?.factionId ?? searchParam('faction') ?? DEFAULT_HOST_FACTION,
+    runLengthDays: 14,
   })
   const [session, setSession] = useState<StoredRoomSession | null>(null)
   const [room, setRoom] = useState<RoomState | null>(null)
@@ -1728,6 +1792,7 @@ function App(): JSX.Element {
         name: lobbyForm.name,
         gameMode,
         targetPlayerCount,
+        runLengthDays: lobbyForm.runLengthDays,
         faction: factionDefinition(lobbyForm.factionId),
         analyticsPlayerId: analyticsPlayerIdRef.current,
       },
@@ -1844,7 +1909,7 @@ function App(): JSX.Element {
         {room !== null ? (
           <div className="topbar-metrics">
             <span className="summary-chip">Room {room.roomId}</span>
-            <span className="summary-chip">Day {room.day}</span>
+            <span className="summary-chip">Day {room.day} of {room.runLengthDays}</span>
             <span className="summary-chip">{weatherLabel(room)}</span>
           </div>
         ) : null}

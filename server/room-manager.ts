@@ -6,9 +6,11 @@ import type {
   PlayerState,
   RoomPhase,
   RoomState,
+  RunLengthDays,
   Weather,
 } from './contracts'
 import type { SimulationTelemetry } from '../src/game/types'
+import { determineFinalOutcome, normalizeRunLengthDays } from './final-outcome'
 
 export interface RoomGameHooks {
   createDay: (day: number) => {
@@ -34,6 +36,7 @@ interface CreateRoomInput {
   name: string
   gameMode: GameMode
   targetPlayerCount: number
+  runLengthDays: RunLengthDays
   faction: FactionSelection
   analyticsPlayerId: string
 }
@@ -154,6 +157,9 @@ export class RoomManager {
       gameMode: input.gameMode,
       targetPlayerCount: Math.max(1, input.targetPlayerCount),
       day: 1,
+      runLengthDays: normalizeRunLengthDays(input.runLengthDays),
+      isGameComplete: false,
+      finalOutcome: null,
       weather,
       phase: input.targetPlayerCount === 1 ? 'planning' : 'lobby',
       players: [
@@ -302,6 +308,10 @@ export class RoomManager {
       throw new Error('The next day can only be requested from results.')
     }
 
+    if (room.isGameComplete) {
+      throw new Error('This run is already complete.')
+    }
+
     const requestedNextDayPlayerIds = room.requestedNextDayPlayerIds.includes(input.playerId)
       ? room.requestedNextDayPlayerIds
       : [...room.requestedNextDayPlayerIds, input.playerId]
@@ -330,9 +340,14 @@ export class RoomManager {
       return room
     }
 
+    const isGameComplete = room.day >= room.runLengthDays
+    const finalOutcome = isGameComplete ? determineFinalOutcome(room.players) : null
+
     const resultsRoom: RoomState = {
       ...room,
       phase: 'results',
+      isGameComplete,
+      finalOutcome,
     }
 
     this.rooms.set(resultsRoom.roomId, resultsRoom)

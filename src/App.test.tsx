@@ -42,6 +42,9 @@ function createRoom(overrides: Partial<RoomState> = {}): RoomState {
     gameMode: 'multiplayer',
     targetPlayerCount: 2,
     day: 2,
+    runLengthDays: 14,
+    isGameComplete: false,
+    finalOutcome: null,
     weather: 'hot',
     phase: 'planning',
     marketBasePrices: {
@@ -113,7 +116,7 @@ function createRoom(overrides: Partial<RoomState> = {}): RoomState {
       },
     ],
     ...overrides,
-  }
+  } as RoomState
 }
 
 function createHostRoom(
@@ -235,8 +238,28 @@ describe('App', () => {
         name: 'Alex',
         gameMode: 'multiplayer',
         targetPlayerCount: 2,
+        runLengthDays: 14,
         faction: SUN_FACTION,
         analyticsPlayerId: expect.any(String),
+      }),
+    )
+  })
+
+  it('sends the selected 30-day run length when hosting a room', () => {
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.change(screen.getByLabelText(/run length/i), {
+      target: { value: '30' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    expect(sendMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'create_room',
+        runLengthDays: 30,
       }),
     )
   })
@@ -256,6 +279,7 @@ describe('App', () => {
         name: 'Alex',
         gameMode: 'singleplayer',
         targetPlayerCount: 1,
+        runLengthDays: 14,
         faction: SUN_FACTION,
         analyticsPlayerId: expect.any(String),
       }),
@@ -1493,6 +1517,71 @@ describe('App', () => {
     expect(screen.queryByRole('button', { name: /request next day/i })).not.toBeInTheDocument()
   })
 
+  it('shows a final multiplayer ending without a next-day button', () => {
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'room_state',
+      room: createRoom({
+        phase: 'results',
+        day: 14,
+        runLengthDays: 14,
+        isGameComplete: true,
+        finalOutcome: {
+          winnerPlayerIds: ['player-guest'],
+          decidedBy: 'reputation',
+        },
+        players: createRoom().players.map((player) =>
+          player.id === 'player-host'
+            ? {
+                ...player,
+                money: 32,
+                reputation: 56,
+                dailyResults: {
+                  cupsSold: 12,
+                  revenue: 18,
+                  satisfaction: 0.79,
+                  reputationDelta: 4,
+                  customersWon: 12,
+                  customersSkipped: 3,
+                  customersSoldOut: 1,
+                },
+              }
+            : {
+                ...player,
+                money: 32,
+                reputation: 61,
+                dailyResults: {
+                  cupsSold: 9,
+                  revenue: 13.5,
+                  satisfaction: 0.68,
+                  reputationDelta: 1,
+                  customersWon: 9,
+                  customersSkipped: 6,
+                  customersSoldOut: 0,
+                },
+              },
+        ),
+      }),
+    })
+
+    expect(screen.getByText(/run complete/i)).toBeInTheDocument()
+    expect(screen.getByText(/blair wins.*reputation/i)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /request next day/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^next day$/i })).not.toBeInTheDocument()
+  })
+
   it('switches the results chart with metric filter buttons', () => {
     render(<App />)
 
@@ -1553,6 +1642,55 @@ describe('App', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /^reputation$/i }))
     expect(screen.getByRole('heading', { name: /reputation over time/i })).toBeInTheDocument()
+  })
+
+  it('shows a final singleplayer summary without a next-day button', () => {
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /play single-player/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'room_state',
+      room: createSoloRoom(
+        {
+          money: 47.25,
+          reputation: 58,
+          dailyResults: {
+            cupsSold: 12,
+            revenue: 18,
+            satisfaction: 0.79,
+            reputationDelta: 4,
+            customersWon: 12,
+            customersSkipped: 3,
+            customersSoldOut: 1,
+          },
+        },
+        {
+          phase: 'results',
+          day: 14,
+          runLengthDays: 14,
+          isGameComplete: true,
+          finalOutcome: {
+            winnerPlayerIds: ['player-host'],
+            decidedBy: 'money',
+          },
+        },
+      ),
+    })
+
+    expect(screen.getByText(/run complete/i)).toBeInTheDocument()
+    expect(screen.getAllByText(/final cash/i).length).toBeGreaterThan(0)
+    expect(screen.getByText(/\$47\.25/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^next day$/i })).not.toBeInTheDocument()
   })
 
   it('offers reconnect using the stored room session', () => {

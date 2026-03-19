@@ -285,6 +285,7 @@ export async function createLanServer(
             name: message.name,
             gameMode: message.gameMode,
             targetPlayerCount: message.targetPlayerCount,
+            runLengthDays: message.runLengthDays,
             faction: message.faction,
             analyticsPlayerId: message.analyticsPlayerId,
           })
@@ -296,6 +297,7 @@ export async function createLanServer(
               rngSeed: room.rngSeed ?? 0,
               gameMode: room.gameMode,
               playerCount: room.targetPlayerCount,
+              runLengthDays: room.runLengthDays,
             })
             telemetryRepository.insertCustomerProfiles({
               gameId: roomId,

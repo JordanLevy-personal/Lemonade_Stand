@@ -183,7 +183,8 @@ function createMultiplayerRoom(manager: RoomManager): RoomState {
     analyticsPlayerId: 'analytics-host',
     gameMode: 'multiplayer',
     targetPlayerCount: 2,
-  })
+    runLengthDays: 14,
+  } as unknown as Parameters<RoomManager['createRoom']>[0])
 }
 
 function createSingleplayerRoom(manager: RoomManager): RoomState {
@@ -195,7 +196,12 @@ function createSingleplayerRoom(manager: RoomManager): RoomState {
     analyticsPlayerId: 'analytics-solo-host',
     gameMode: 'singleplayer',
     targetPlayerCount: 1,
-  })
+    runLengthDays: 14,
+  } as unknown as Parameters<RoomManager['createRoom']>[0])
+}
+
+function overwriteStoredRoom(manager: RoomManager, room: RoomState): void {
+  ;((manager as unknown as { rooms: Map<string, RoomState> }).rooms).set(room.roomId, room)
 }
 
 describe('RoomManager', () => {
@@ -209,6 +215,7 @@ describe('RoomManager', () => {
     expect(room.phase).toBe('lobby')
     expect(room.gameMode).toBe('multiplayer')
     expect(room.targetPlayerCount).toBe(2)
+    expect((room as RoomState & { runLengthDays?: number }).runLengthDays).toBe(14)
     expect(room.players).toHaveLength(1)
     expect(room.players[0]?.connectionStatus).toBe('connected')
   })
@@ -409,5 +416,112 @@ describe('RoomManager', () => {
     expect(nextDayRoom.phase).toBe('planning')
     expect(nextDayRoom.day).toBe(2)
     expect(nextDayRoom.requestedNextDayPlayerIds).toEqual([])
+  })
+
+  it('marks the run complete on the final multiplayer day using reputation as the tiebreaker', () => {
+    const manager = createManager()
+    createMultiplayerRoom(manager)
+    manager.joinRoom({
+      roomId: 'ROOM01',
+      name: 'Guest',
+      faction: FACTION_BETA,
+      analyticsPlayerId: 'analytics-guest',
+    })
+
+    const room = manager.getRoom('ROOM01')!
+    overwriteStoredRoom(manager, {
+      ...room,
+      day: 14,
+      phase: 'simulating',
+      runLengthDays: 14,
+      isGameComplete: false,
+      finalOutcome: null,
+      simulation: {
+        customerEvents: [],
+        simulationStartAt: 12_000,
+        durationMs: 6_000,
+      },
+      players: room.players.map((player) =>
+        player.id === 'host-1'
+          ? {
+              ...player,
+              money: 32,
+              reputation: 54,
+              dailyResults: {
+                cupsSold: 8,
+                revenue: 12,
+                satisfaction: 0.7,
+                reputationDelta: 2,
+                customersWon: 8,
+                customersSkipped: 4,
+                customersSoldOut: 0,
+              },
+            }
+          : {
+              ...player,
+              money: 32,
+              reputation: 61,
+              dailyResults: {
+                cupsSold: 10,
+                revenue: 15,
+                satisfaction: 0.8,
+                reputationDelta: 3,
+                customersWon: 10,
+                customersSkipped: 3,
+                customersSoldOut: 0,
+              },
+            },
+      ),
+    } as RoomState)
+
+    const completedRoom = manager.completeSimulation('ROOM01') as RoomState & {
+      runLengthDays: number
+      isGameComplete: boolean
+      finalOutcome: { winnerPlayerIds: string[]; decidedBy: string } | null
+    }
+
+    expect(completedRoom.phase).toBe('results')
+    expect(completedRoom.isGameComplete).toBe(true)
+    expect(completedRoom.finalOutcome).toEqual({
+      winnerPlayerIds: ['room01-player-2'],
+      decidedBy: 'reputation',
+    })
+  })
+
+  it('rejects next-day requests once the run is complete', () => {
+    const manager = createManager()
+    createSingleplayerRoom(manager)
+
+    const room = manager.getRoom('SOLO1')!
+    overwriteStoredRoom(manager, {
+      ...room,
+      day: 14,
+      phase: 'results',
+      runLengthDays: 14,
+      isGameComplete: true,
+      finalOutcome: {
+        winnerPlayerIds: ['solo-host'],
+        decidedBy: 'money',
+      },
+      players: room.players.map((player) => ({
+        ...player,
+        dailyResults: {
+          cupsSold: 11,
+          revenue: 16.5,
+          satisfaction: 0.74,
+          reputationDelta: 3,
+          customersWon: 11,
+          customersSkipped: 2,
+          customersSoldOut: 0,
+        },
+      })),
+    } as RoomState)
+
+    expect(() =>
+      manager.requestNextDay({
+        roomId: 'SOLO1',
+        playerId: 'solo-host',
+      }),
+    ).toThrow('This run is already complete.')
   })
 })
