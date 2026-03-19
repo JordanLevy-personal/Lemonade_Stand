@@ -67,6 +67,75 @@
   gap: 0.85rem;
 }
 
+.buy-field-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.75rem;
+  margin-top: 0.5rem;
+}
+
+.buy-field-column {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.buy-field-grid .field-input {
+  padding: 0.5rem 0.6rem;
+  font-size: 0.88rem;
+}
+
+.capacity-hint {
+  font-size: 0.78rem;
+  color: rgba(29, 74, 79, 0.62);
+}
+
+.bottleneck-indicator {
+  color: #b4582f;
+  font-weight: 700;
+}
+
+.shopping-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+  font-size: 0.88rem;
+  color: #1d4a4f;
+}
+
+.overspend-warning {
+  color: #ad3f23;
+  font-weight: 700;
+}
+
+.price-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 1.25rem;
+  margin-top: 0.5rem;
+}
+
+.price-row .field {
+  flex-shrink: 0;
+}
+
+.price-row .field-input {
+  width: 5rem;
+}
+
+.price-context {
+  font-size: 0.85rem;
+  color: rgba(29, 74, 79, 0.72);
+  white-space: nowrap;
+  margin-bottom: 0.6rem;
+}
+
+.margin-negative {
+  color: #ad3f23;
+  font-weight: 700;
+}
+
 .field {
   display: grid;
   gap: 0.35rem;
@@ -385,6 +454,19 @@
   .topbar {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .buy-field-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .price-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .price-row .field {
+    width: 100%;
   }
 
   .crowd-scene {

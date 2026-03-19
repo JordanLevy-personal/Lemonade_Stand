@@ -273,7 +273,7 @@ describe('App', () => {
       room: createRoom(),
     })
 
-    fireEvent.change(screen.getByLabelText(/buy lemons/i), {
+    fireEvent.change(screen.getByLabelText(/lemons @/i), {
       target: { value: '4' },
     })
     fireEvent.change(screen.getByLabelText(/price per cup/i), {

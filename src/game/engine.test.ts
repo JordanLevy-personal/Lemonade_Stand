@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { defaultBalanceConfig } from './balance'
 import {
   beginNextDay,
+  calculatePerIngredientCapacity,
   calculateSellableCups,
   calculateSatisfactionScore,
   calculateStandScore,
@@ -534,6 +535,44 @@ describe('multiplayer engine', () => {
     expect(host?.money).not.toBe(defaultBalanceConfig.startingMoney)
     expect(host?.dailyResults.cupsSold).toBe(0)
     expect(host?.isReady).toBe(false)
+  })
+})
+
+describe('calculatePerIngredientCapacity', () => {
+  it('returns per-ingredient cup counts based on inventory and recipe', () => {
+    expect(
+      calculatePerIngredientCapacity(
+        { lemons: 10, sugar: 6, ice: 9 },
+        { lemons: 2, sugar: 3, ice: 3 },
+      ),
+    ).toEqual({ lemons: 5, sugar: 2, ice: 3 })
+  })
+
+  it('returns Infinity for ingredients with zero recipe requirement', () => {
+    expect(
+      calculatePerIngredientCapacity(
+        { lemons: 10, sugar: 6, ice: 0 },
+        { lemons: 2, sugar: 3, ice: 0 },
+      ),
+    ).toEqual({ lemons: 5, sugar: 2, ice: Infinity })
+  })
+
+  it('handles fractional recipe values', () => {
+    expect(
+      calculatePerIngredientCapacity(
+        { lemons: 0.3, sugar: 0.3, ice: 0 },
+        { lemons: 0.1, sugar: 0.1, ice: 0 },
+      ),
+    ).toEqual({ lemons: 3, sugar: 3, ice: Infinity })
+  })
+
+  it('returns zero when inventory is empty and recipe requires ingredients', () => {
+    expect(
+      calculatePerIngredientCapacity(
+        { lemons: 0, sugar: 0, ice: 0 },
+        { lemons: 2, sugar: 2, ice: 2 },
+      ),
+    ).toEqual({ lemons: 0, sugar: 0, ice: 0 })
   })
 })
 
