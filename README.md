@@ -1,6 +1,6 @@
-# Roguelike Lemonade Stand
+# Lemonade Stand
 
-A browser-based roguelike business sim where each day is a lemonade-stand management puzzle and each night is a card draft that bends the rules of the run.
+A browser-based business sim where each day is a lemonade-stand management puzzle and each night is a card draft that bends the rules of the run.
 
 ## Tech Stack
 

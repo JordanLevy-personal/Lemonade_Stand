@@ -1,0 +1,21 @@
+{
+  "url": "http://127.0.0.1:5173",
+  "roomId": "IB7KEP",
+  "hostName": "Alex",
+  "guestName": "Blair",
+  "readyHeading": "Dial in the recipe",
+  "screenshots": {
+    "host": "output/playwright-multiplayer-entry-skill/host-ready.png",
+    "guest": "output/playwright-multiplayer-entry-skill/guest-ready.png"
+  },
+  "host": {
+    "renderText": "{\"roomId\":\"IB7KEP\",\"phase\":\"planning\",\"day\":1,\"weather\":\"hot\",\"playerId\":\"3ppxvb-host\",\"elapsedMs\":0,\"visibleCustomers\":[]}",
+    "consoleErrors": [],
+    "pageErrors": []
+  },
+  "guest": {
+    "renderText": "{\"roomId\":\"IB7KEP\",\"phase\":\"planning\",\"day\":1,\"weather\":\"hot\",\"playerId\":\"ib7kep-player-2\",\"elapsedMs\":0,\"visibleCustomers\":[]}",
+    "consoleErrors": [],
+    "pageErrors": []
+  }
+}

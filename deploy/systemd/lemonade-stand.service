@@ -1,5 +1,5 @@
 [Unit]
-Description=Roguelike Lemonade Stand multiplayer server
+Description=Lemonade Stand multiplayer server
 After=network.target
 
 [Service]
@@ -7,7 +7,7 @@ Type=simple
 # Replace these with the user and group that own the app checkout.
 User=deploy
 Group=deploy
-WorkingDirectory=/var/www/roguelike-lemonade-stand
+WorkingDirectory=/var/www/lemonade-stand
 Environment=NODE_ENV=production
 Environment=PORT=3001
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
