@@ -6,10 +6,13 @@ import type {
   PlayerState,
   RoomPhase,
   RoomState,
+  RunUpgradeId,
+  RunLengthDays,
   Weather,
 } from './contracts'
 import type { SimulationTelemetry } from '../src/game/types'
 import { validateTargetPlayerCount } from '../src/shared/room-player-count'
+import { determineFinalOutcome, normalizeRunLengthDays } from './final-outcome'
 
 export interface RoomGameHooks {
   createDay: (day: number) => {
@@ -18,6 +21,7 @@ export interface RoomGameHooks {
     customerRoster: NonNullable<RoomState['customerRoster']>
     rngSeed: number
   }
+  getUpgradeCost: (upgradeId: RunUpgradeId) => number
   startSimulation: (
     room: RoomState,
     simulationStartAt: number,
@@ -26,7 +30,7 @@ export interface RoomGameHooks {
     telemetry: SimulationTelemetry
   }
   startNextDay: (room: RoomState) => RoomState
-  createPlayerDefaults: () => Pick<PlayerState, 'money' | 'inventory' | 'reputation'>
+  createPlayerDefaults: () => Pick<PlayerState, 'money' | 'inventory' | 'reputation' | 'ownedUpgrades'>
 }
 
 interface CreateRoomInput {
@@ -35,6 +39,7 @@ interface CreateRoomInput {
   name: string
   gameMode: GameMode
   targetPlayerCount: number
+  runLengthDays: RunLengthDays
   faction: FactionSelection
   analyticsPlayerId: string
 }
@@ -56,6 +61,12 @@ interface SubmitPlanInput {
 interface RequestNextDayInput {
   roomId: string
   playerId: string
+}
+
+interface PurchaseUpgradeInput {
+  roomId: string
+  playerId: string
+  upgradeId: RunUpgradeId
 }
 
 interface DisconnectInput {
@@ -82,7 +93,7 @@ function readyPlayers(room: RoomState): number {
 }
 
 function requiredPlayerCount(room: Pick<RoomState, 'targetPlayerCount'>): number {
-  return room.targetPlayerCount
+  return Math.max(1, room.targetPlayerCount)
 }
 
 function reconnectExistingPlayer(
@@ -156,6 +167,9 @@ export class RoomManager {
       gameMode: input.gameMode,
       targetPlayerCount,
       day: 1,
+      runLengthDays: normalizeRunLengthDays(input.runLengthDays),
+      isGameComplete: false,
+      finalOutcome: null,
       weather,
       phase: targetPlayerCount === 1 ? 'planning' : 'lobby',
       players: [
@@ -165,6 +179,7 @@ export class RoomManager {
           faction: input.faction,
           dailyPlan: null,
           dailyResults: null,
+          history: [],
           hasSubmittedPlan: false,
           connectionStatus: 'connected',
           ...defaults,
@@ -234,6 +249,7 @@ export class RoomManager {
           faction: input.faction,
           dailyPlan: null,
           dailyResults: null,
+          history: [],
           hasSubmittedPlan: false,
           connectionStatus: 'connected',
           ...defaults,
@@ -302,6 +318,10 @@ export class RoomManager {
       throw new Error('The next day can only be requested from results.')
     }
 
+    if (room.isGameComplete) {
+      throw new Error('This run is already complete.')
+    }
+
     const requestedNextDayPlayerIds = room.requestedNextDayPlayerIds.includes(input.playerId)
       ? room.requestedNextDayPlayerIds
       : [...room.requestedNextDayPlayerIds, input.playerId]
@@ -323,6 +343,53 @@ export class RoomManager {
     return nextDayRoom
   }
 
+  purchaseUpgrade(input: PurchaseUpgradeInput): RoomState {
+    const room = this.requireRoom(input.roomId)
+
+    if (activePhase(room) !== 'planning') {
+      throw new Error('Upgrades can only be purchased during planning.')
+    }
+
+    const player = room.players.find((candidate) => candidate.id === input.playerId)
+
+    if (player === undefined) {
+      throw new Error('The selected player could not be found.')
+    }
+
+    if (input.upgradeId !== 'recipe-feedback-hints') {
+      throw new Error('Unknown upgrade.')
+    }
+
+    const ownsUpgrade = player.ownedUpgrades?.recipeFeedbackHints ?? false
+    if (ownsUpgrade) {
+      throw new Error('That upgrade is already owned.')
+    }
+
+    const cost = this.hooks.getUpgradeCost(input.upgradeId)
+    if (player.money < cost) {
+      throw new Error('That player cannot afford the upgrade.')
+    }
+
+    const updatedRoom: RoomState = {
+      ...room,
+      players: room.players.map((candidate) =>
+        candidate.id === input.playerId
+          ? {
+              ...candidate,
+              money: candidate.money - cost,
+              ownedUpgrades: {
+                ...(candidate.ownedUpgrades ?? { recipeFeedbackHints: false }),
+                recipeFeedbackHints: true,
+              },
+            }
+          : candidate,
+      ),
+    }
+
+    this.rooms.set(updatedRoom.roomId, updatedRoom)
+    return updatedRoom
+  }
+
   completeSimulation(roomId: string): RoomState {
     const room = this.requireRoom(roomId)
 
@@ -330,9 +397,14 @@ export class RoomManager {
       return room
     }
 
+    const isGameComplete = room.day >= room.runLengthDays
+    const finalOutcome = isGameComplete ? determineFinalOutcome(room.players) : null
+
     const resultsRoom: RoomState = {
       ...room,
       phase: 'results',
+      isGameComplete,
+      finalOutcome,
     }
 
     this.rooms.set(resultsRoom.roomId, resultsRoom)

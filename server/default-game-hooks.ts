@@ -60,6 +60,9 @@ function toGameRoom(room: RoomState): GameRoomState {
       money: player.money,
       inventory: player.inventory,
       reputation: player.reputation,
+      ownedUpgrades: player.ownedUpgrades ?? {
+        recipeFeedbackHints: false,
+      },
       isReady: player.hasSubmittedPlan,
       connectionStatus: player.connectionStatus,
       dailyPlan:
@@ -87,26 +90,44 @@ function toGameRoom(room: RoomState): GameRoomState {
             customersSkipped: player.dailyResults.customersSkipped,
             customersSoldOut: player.dailyResults.customersSoldOut,
           },
+      history: player.history.map((entry) => ({
+        day: entry.day,
+        revenue: entry.revenue,
+        purchaseCost: entry.purchaseCost,
+        profit: entry.profit,
+        endingMoney: entry.endingMoney,
+        reputationAfter: entry.reputationAfter,
+        cupsSold: entry.cupsSold,
+        satisfaction: entry.satisfaction,
+        recipeSnapshot: entry.recipeSnapshot,
+      })),
     })),
     marketBasePrices: room.marketBasePrices,
     simulation:
       room.simulation === null
         ? null
         : {
-            events: room.simulation.customerEvents.map((event, index) => ({
+            events: room.simulation.customerEvents.map((event) => ({
               id: event.id,
-              customerId: event.id,
-              customerIndex: index,
-              spawnAt: event.arrivalOffsetMs,
-              resolveAt: event.arrivalOffsetMs + 1_500,
-              targetPlayerId: event.chosenPlayerId,
+              customerId: event.customerId,
+              customerIndex: event.customerIndex,
+              spawnAt: event.spawnAt,
+              outcomeAt: event.outcomeAt,
+              exitAt: event.exitAt,
+              standStops: event.standStops.map((stop) => ({
+                playerId: stop.playerId,
+                arriveAt: stop.arriveAt,
+                departAt: stop.departAt,
+              })),
+              targetPlayerId: event.targetPlayerId,
               outcome: event.outcome,
               salePrice: event.salePrice,
               satisfaction: event.satisfaction,
               willingnessToPay: event.willingnessToPay,
-              lane: index % 3,
-              xJitter: 0,
-              yJitter: 0,
+              lane: event.lane,
+              xJitter: event.xJitter,
+              yJitter: event.yJitter,
+              feedbackHintsByPlayerId: event.feedbackHintsByPlayerId,
             })),
             durationMs: room.simulation.durationMs,
             totalCustomers: room.simulation.customerEvents.length,
@@ -126,6 +147,9 @@ function toServerRoom(gameRoom: GameRoomState): RoomState {
     gameMode: gameRoom.gameMode,
     targetPlayerCount: gameRoom.maxPlayers,
     day: gameRoom.day,
+    runLengthDays: 14,
+    isGameComplete: false,
+    finalOutcome: null,
     weather: gameRoom.weather ?? 'sunny',
     phase: gameRoom.phase,
     players: gameRoom.players.map((player) => ({
@@ -139,8 +163,22 @@ function toServerRoom(gameRoom: GameRoomState): RoomState {
       money: player.money,
       inventory: player.inventory,
       reputation: player.reputation,
+      ownedUpgrades: player.ownedUpgrades ?? {
+        recipeFeedbackHints: false,
+      },
       dailyPlan: player.dailyPlan,
       dailyResults: toServerResults(player.dailyResults),
+      history: player.history.map((entry) => ({
+        day: entry.day,
+        revenue: entry.revenue,
+        purchaseCost: entry.purchaseCost,
+        profit: entry.profit,
+        endingMoney: entry.endingMoney,
+        reputationAfter: entry.reputationAfter,
+        cupsSold: entry.cupsSold,
+        satisfaction: entry.satisfaction,
+        recipeSnapshot: entry.recipeSnapshot,
+      })),
       hasSubmittedPlan: player.isReady,
       connectionStatus: player.connectionStatus,
     })),
@@ -151,12 +189,25 @@ function toServerRoom(gameRoom: GameRoomState): RoomState {
         : {
             customerEvents: gameRoom.simulation.events.map((event) => ({
               id: event.id,
-              arrivalOffsetMs: event.spawnAt,
+              customerId: event.customerId,
+              customerIndex: event.customerIndex,
+              spawnAt: event.spawnAt,
+              outcomeAt: event.outcomeAt,
+              exitAt: event.exitAt,
+              standStops: event.standStops.map((stop) => ({
+                playerId: stop.playerId,
+                arriveAt: stop.arriveAt,
+                departAt: stop.departAt,
+              })),
               willingnessToPay: event.willingnessToPay,
-              chosenPlayerId: event.targetPlayerId,
+              targetPlayerId: event.targetPlayerId,
               outcome: event.outcome,
               salePrice: event.salePrice,
               satisfaction: event.satisfaction,
+              lane: event.lane,
+              xJitter: event.xJitter,
+              yJitter: event.yJitter,
+              feedbackHintsByPlayerId: event.feedbackHintsByPlayerId,
             })),
             simulationStartAt: null,
             durationMs: gameRoom.simulation.durationMs,
@@ -206,6 +257,13 @@ export function createDefaultRoomGameHooks(): RoomGameHooks {
     createDay(day) {
       return createPreviewDay(day)
     },
+    getUpgradeCost(upgradeId) {
+      if (upgradeId !== 'recipe-feedback-hints') {
+        throw new Error('Unknown upgrade.')
+      }
+
+      return defaultBalanceConfig.recipeFeedbackHintUpgradeCost
+    },
     startSimulation(room, simulationStartAt) {
       let gameRoom = toGameRoom(room)
 
@@ -222,6 +280,9 @@ export function createDefaultRoomGameHooks(): RoomGameHooks {
       return {
         room: {
           ...nextRoom,
+          runLengthDays: room.runLengthDays,
+          isGameComplete: false,
+          finalOutcome: null,
           phase: 'simulating',
           simulation:
             nextRoom.simulation === null
@@ -244,6 +305,9 @@ export function createDefaultRoomGameHooks(): RoomGameHooks {
 
       return {
         ...toServerRoom(nextDay),
+        runLengthDays: room.runLengthDays,
+        isGameComplete: false,
+        finalOutcome: null,
         phase: 'planning',
         pausedFromPhase: null,
         requestedNextDayPlayerIds: [],
@@ -254,6 +318,9 @@ export function createDefaultRoomGameHooks(): RoomGameHooks {
         money: defaultBalanceConfig.startingMoney,
         inventory: emptyInventory(),
         reputation: defaultBalanceConfig.startingReputation,
+        ownedUpgrades: {
+          recipeFeedbackHints: false,
+        },
       }
     },
   }

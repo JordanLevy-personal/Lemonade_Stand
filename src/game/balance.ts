@@ -9,10 +9,12 @@ export const defaultBalanceConfig: BalanceConfig = {
     ice: 2,
   },
   defaultPrice: 1.5,
+  recipeFeedbackHintUpgradeCost: 25,
+  customerTastePreferenceWeight: 0.2,
   maxPlayers: 2,
   reputationMin: 0,
   reputationMax: 100,
-  simulationDurationMs: 7_000,
+  simulationDurationMs: 28_000,
   weatherProfiles: {
     sunny: {
       label: 'Sunny',

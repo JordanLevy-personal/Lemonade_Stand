@@ -4,9 +4,15 @@ export type GameMode = 'singleplayer' | 'multiplayer'
 export type Weather = 'sunny' | 'hot' | 'cloudy' | 'raining'
 
 export type ConnectionStatus = 'connected' | 'disconnected'
+export type RunUpgradeId = 'recipe-feedback-hints'
 
 export type CustomerOutcome = 'buy' | 'skip' | 'soldOut'
-export type CustomerOutcomeReason = 'purchased' | 'all_prices_above_willingness' | 'selected_stand_sold_out'
+export type CustomerOutcomeReason =
+  | 'purchased'
+  | 'purchased_after_sold_out_reroute'
+  | 'all_prices_above_willingness'
+  | 'selected_stand_sold_out'
+  | 'reroute_exhausted_after_sold_out'
 export type CustomerOfferResult = 'selected' | 'not_selected' | 'price_rejected' | 'selected_but_sold_out'
 
 export interface Inventory {
@@ -19,6 +25,15 @@ export interface Recipe {
   lemons: number
   sugar: number
   ice: number
+}
+
+export interface RecipeFeedbackHint {
+  ingredient: keyof Recipe
+  direction: 'more' | 'less'
+}
+
+export interface OwnedUpgrades {
+  recipeFeedbackHints: boolean
 }
 
 export interface DailyPlan {
@@ -35,6 +50,18 @@ export interface PlayerDailyResults {
   customersWon: number
   customersSkipped: number
   customersSoldOut: number
+}
+
+export interface PlayerDayHistoryEntry {
+  day: number
+  revenue: number
+  purchaseCost: number
+  profit: number
+  endingMoney: number
+  reputationAfter: number
+  cupsSold: number
+  satisfaction: number
+  recipeSnapshot: Recipe
 }
 
 export interface FactionDefinition {
@@ -54,8 +81,16 @@ export interface PlayerState {
   reputation: number
   isReady: boolean
   connectionStatus: ConnectionStatus
+  ownedUpgrades?: OwnedUpgrades
   dailyPlan: DailyPlan
   dailyResults: PlayerDailyResults
+  history: PlayerDayHistoryEntry[]
+}
+
+export interface CustomerStop {
+  playerId: string
+  arriveAt: number
+  departAt: number
 }
 
 export interface CustomerEvent {
@@ -63,7 +98,9 @@ export interface CustomerEvent {
   customerId: string
   customerIndex: number
   spawnAt: number
-  resolveAt: number
+  outcomeAt: number
+  exitAt: number
+  standStops: CustomerStop[]
   targetPlayerId: string | null
   outcome: CustomerOutcome
   salePrice: number
@@ -72,6 +109,7 @@ export interface CustomerEvent {
   lane: number
   xJitter: number
   yJitter: number
+  feedbackHintsByPlayerId?: Record<string, RecipeFeedbackHint | null>
 }
 
 export interface RoomSimulation {
@@ -113,6 +151,7 @@ export interface TelemetryCustomerEvent {
   salePrice: number
   satisfaction: number
   outcomeReason: CustomerOutcomeReason
+  rerouteCount: number
 }
 
 export interface TelemetryCustomerOfferScore {
@@ -126,6 +165,7 @@ export interface TelemetryCustomerOfferScore {
   historyBonus: number
   totalScore: number
   canFulfill: boolean
+  selectionRound: number
   offerResult: CustomerOfferResult
 }
 
@@ -174,6 +214,8 @@ export interface BalanceConfig {
   startingReputation: number
   defaultRecipe: Recipe
   defaultPrice: number
+  recipeFeedbackHintUpgradeCost: number
+  customerTastePreferenceWeight: number
   weatherProfiles: Record<Weather, WeatherProfile>
   marketPriceBands: Record<keyof Inventory, IngredientPriceBand>
   maxPlayers: number

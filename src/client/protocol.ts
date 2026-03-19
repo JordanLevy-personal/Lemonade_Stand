@@ -1,5 +1,12 @@
+import type {
+  OwnedUpgrades,
+  RecipeFeedbackHint,
+  RunUpgradeId,
+} from '../game/types'
+
 export type RoomPhase = 'lobby' | 'planning' | 'simulating' | 'results' | 'paused'
 export type GameMode = 'singleplayer' | 'multiplayer'
+export type RunLengthDays = 14 | 30
 
 export type Weather = 'sunny' | 'hot' | 'cloudy' | 'raining'
 
@@ -33,6 +40,18 @@ export interface PlayerResults {
   customersSoldOut: number
 }
 
+export interface PlayerDayHistoryEntry {
+  day: number
+  revenue: number
+  purchaseCost: number
+  profit: number
+  endingMoney?: number
+  reputationAfter: number
+  cupsSold: number
+  satisfaction: number
+  recipeSnapshot?: Recipe
+}
+
 export interface FactionDefinition {
   id: string
   name: string
@@ -46,20 +65,37 @@ export interface PlayerState {
   money: number
   inventory: Inventory
   reputation: number
+  ownedUpgrades?: OwnedUpgrades
   hasSubmittedPlan: boolean
   connectionStatus: 'connected' | 'disconnected'
   dailyPlan: PlayerPlan | null
   dailyResults: PlayerResults | null
+  history: PlayerDayHistoryEntry[]
+}
+
+export interface CustomerStop {
+  playerId: string
+  arriveAt: number
+  departAt: number
 }
 
 export interface CustomerEvent {
   id: string
-  arrivalOffsetMs: number
+  customerId: string
+  customerIndex: number
+  spawnAt: number
+  outcomeAt: number
+  exitAt: number
+  standStops: CustomerStop[]
   willingnessToPay: number
-  chosenPlayerId: string | null
+  targetPlayerId: string | null
   outcome: CustomerOutcome
   salePrice: number
   satisfaction: number
+  lane: number
+  xJitter: number
+  yJitter: number
+  recipeFeedbackHint?: RecipeFeedbackHint | null
 }
 
 export interface RoomSimulation {
@@ -68,12 +104,20 @@ export interface RoomSimulation {
   simulationStartAt: number
 }
 
+export interface RoomFinalOutcome {
+  winnerPlayerIds: string[]
+  decidedBy: 'money' | 'reputation' | 'draw'
+}
+
 export interface RoomState {
   roomId: string
   hostPlayerId: string
   gameMode: GameMode
   targetPlayerCount: number
   day: number
+  runLengthDays: RunLengthDays
+  isGameComplete: boolean
+  finalOutcome: RoomFinalOutcome | null
   weather: Weather | null
   phase: RoomPhase
   pausedFromPhase: Exclude<RoomPhase, 'paused'> | null
@@ -117,6 +161,7 @@ export interface CreateRoomMessage {
   name: string
   gameMode: GameMode
   targetPlayerCount: number
+  runLengthDays: RunLengthDays
   faction: FactionDefinition
   analyticsPlayerId: string
 }
@@ -137,6 +182,13 @@ export interface SubmitPlanMessage {
   plan: PlayerPlan
 }
 
+export interface PurchaseUpgradeMessage {
+  type: 'purchase_upgrade'
+  roomId: string
+  playerId: string
+  upgradeId: RunUpgradeId
+}
+
 export interface RequestNextDayMessage {
   type: 'request_next_day'
   roomId: string
@@ -147,4 +199,5 @@ export type ClientMessage =
   | CreateRoomMessage
   | JoinRoomMessage
   | SubmitPlanMessage
+  | PurchaseUpgradeMessage
   | RequestNextDayMessage

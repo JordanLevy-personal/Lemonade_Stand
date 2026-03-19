@@ -1,7 +1,14 @@
 export type SupportedGameMode = 'singleplayer' | 'multiplayer'
 
 export const SINGLEPLAYER_TARGET_COUNT = 1
-export const SUPPORTED_MULTIPLAYER_PLAYER_COUNTS = [2, 3, 4] as const
+export const MIN_MULTIPLAYER_PLAYER_COUNT = 2
+export const MAX_MULTIPLAYER_PLAYER_COUNT = 4
+export const SUPPORTED_MULTIPLAYER_PLAYER_COUNTS = Object.freeze(
+  Array.from(
+    { length: MAX_MULTIPLAYER_PLAYER_COUNT - MIN_MULTIPLAYER_PLAYER_COUNT + 1 },
+    (_, index) => MIN_MULTIPLAYER_PLAYER_COUNT + index,
+  ),
+)
 export const DEFAULT_MULTIPLAYER_PLAYER_COUNT = SUPPORTED_MULTIPLAYER_PLAYER_COUNTS[0]
 
 export function validateTargetPlayerCount(
@@ -20,7 +27,10 @@ export function validateTargetPlayerCount(
     return SINGLEPLAYER_TARGET_COUNT
   }
 
-  if (!SUPPORTED_MULTIPLAYER_PLAYER_COUNTS.includes(targetPlayerCount as 2 | 3 | 4)) {
+  if (
+    targetPlayerCount < MIN_MULTIPLAYER_PLAYER_COUNT ||
+    targetPlayerCount > MAX_MULTIPLAYER_PLAYER_COUNT
+  ) {
     throw new Error('Multiplayer rooms support 2 to 4 players.')
   }
 

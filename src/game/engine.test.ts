@@ -4,6 +4,7 @@ import { defaultBalanceConfig } from './balance'
 import {
   beginNextDay,
   calculatePerIngredientCapacity,
+  calculateRecipeFeedbackHint,
   calculateSellableCups,
   calculateSatisfactionScore,
   calculateStandScore,
@@ -65,6 +66,7 @@ describe('multiplayer engine', () => {
     expect(room.players[0].reputation).toBe(50)
     expect(room.players[0].faction.id).toBe('sun-guild')
     expect(room.players[1].faction.id).toBe('market-tide')
+    expect(defaultBalanceConfig.simulationDurationMs).toBe(28_000)
   })
 
   it('creates a planning singleplayer room immediately when the target count is one', () => {
@@ -274,6 +276,59 @@ describe('multiplayer engine', () => {
     expect(calculateSatisfactionScore(0.5, 1, 2)).toBe(0.25)
   })
 
+  it('selects the strongest recipe feedback hint with deterministic tie-breaking', () => {
+    expect(
+      calculateRecipeFeedbackHint(
+        {
+          lemons: 1,
+          sugar: 1,
+          ice: 1,
+        },
+        {
+          lemons: 4,
+          sugar: 4,
+          ice: 4,
+        },
+      ),
+    ).toEqual({
+      ingredient: 'lemons',
+      direction: 'more',
+    })
+
+    expect(
+      calculateRecipeFeedbackHint(
+        {
+          lemons: 3,
+          sugar: 4,
+          ice: 2,
+        },
+        {
+          lemons: 1,
+          sugar: 2,
+          ice: 5,
+        },
+      ),
+    ).toEqual({
+      ingredient: 'ice',
+      direction: 'more',
+    })
+
+    expect(
+      calculateRecipeFeedbackHint(
+        {
+          lemons: 2,
+          sugar: 2,
+          ice: 2,
+        },
+        {
+          lemons: 2,
+          sugar: 2,
+          ice: 2,
+        },
+      ),
+    ).toBeNull()
+  })
+
   it('resolves ties deterministically from the room seed', () => {
     const readyFirst = setPlayerReady(
       setPlayerReady(createPlanningRoom(123), 'player-host', true),
@@ -400,7 +455,7 @@ describe('multiplayer engine', () => {
     expect(host?.dailyResults.customersSoldOut).toBeGreaterThan(0)
   })
 
-  it('emits customer telemetry reasons and offer-score details for price rejection and sold-out outcomes', () => {
+  it('emits customer telemetry reasons and offer-score details for price rejection', () => {
     let priceRejectedRoom = createPlanningRoom(13)
     priceRejectedRoom = {
       ...priceRejectedRoom,
@@ -417,10 +472,20 @@ describe('multiplayer engine', () => {
           standHistory: {},
         },
       ],
+      players: priceRejectedRoom.players.map((player) =>
+        player.id === 'player-host'
+          ? {
+              ...player,
+              ownedUpgrades: {
+                recipeFeedbackHints: true,
+              },
+            }
+          : player,
+      ),
     }
     priceRejectedRoom = updatePlayerPlan(priceRejectedRoom, 'player-host', {
       purchases: { lemons: 6, sugar: 6, ice: 6 },
-      recipe: { lemons: 2, sugar: 2, ice: 2 },
+      recipe: { lemons: 4, sugar: 2, ice: 2 },
       price: 4,
     })
     priceRejectedRoom = updatePlayerPlan(priceRejectedRoom, 'player-guest', {
@@ -456,6 +521,12 @@ describe('multiplayer engine', () => {
         chosenPlayerId: null,
       }),
     ])
+    expect(
+      priceRejected.room.simulation?.events[0]?.feedbackHintsByPlayerId?.['player-host'],
+    ).toEqual({
+      ingredient: 'lemons',
+      direction: 'less',
+    })
     expect(priceRejected.telemetry.customerOfferScores).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -471,37 +542,468 @@ describe('multiplayer engine', () => {
       ]),
     )
 
-    let soldOutRoom = createPlanningRoom(5)
-    soldOutRoom = updatePlayerPlan(soldOutRoom, 'player-host', {
-      purchases: {
-        lemons: 2,
-        sugar: 2,
-        ice: 2,
+  })
+
+  it('dampens customer taste offsets when building preferred recipes', () => {
+    let room = createPlanningRoom(23)
+    room = {
+      ...room,
+      weather: 'sunny',
+      marketBasePrices: {
+        lemons: 0.3,
+        sugar: 0.2,
+        ice: 0.1,
       },
-      recipe: {
-        lemons: 2,
-        sugar: 2,
-        ice: 2,
+      customerRoster: [
+        {
+          id: 'taste-weight-customer',
+          tasteOffsets: { lemons: 2, sugar: -1, ice: -2 },
+          standHistory: {},
+        },
+      ],
+    }
+    room = updatePlayerPlan(room, 'player-host', {
+      purchases: { lemons: 6, sugar: 6, ice: 6 },
+      recipe: { lemons: 2, sugar: 2, ice: 2 },
+      price: 1.2,
+    })
+    room = updatePlayerPlan(room, 'player-guest', {
+      purchases: { lemons: 6, sugar: 6, ice: 6 },
+      recipe: { lemons: 2, sugar: 2, ice: 2 },
+      price: 1.2,
+    })
+    room = setPlayerReady(setPlayerReady(room, 'player-host', true), 'player-guest', true)
+
+    const simulated = startSimulationWithTelemetry(room, {}, {
+      ...defaultBalanceConfig,
+      customerTastePreferenceWeight: 0.2,
+      weatherProfiles: {
+        ...defaultBalanceConfig.weatherProfiles,
+        sunny: {
+          ...defaultBalanceConfig.weatherProfiles.sunny,
+          customerCount: 1,
+          baseWillingnessToPay: 2,
+          willingnessVariance: 0,
+        },
       },
+    })
+
+    expect(simulated.telemetry.customerEvents[0]).toEqual(
+      expect.objectContaining({
+        preferredRecipe: {
+          lemons: 2.4,
+          sugar: 1.8,
+          ice: 1.6,
+        },
+      }),
+    )
+  })
+
+  it('reroutes customers away from sold-out winners and records reroute telemetry', () => {
+    let room = createPlanningRoom(5)
+    room = {
+      ...room,
+      weather: 'sunny',
+      marketBasePrices: {
+        lemons: 0.3,
+        sugar: 0.2,
+        ice: 0.1,
+      },
+      customerRoster: [
+        {
+          id: 'reroute-customer',
+          tasteOffsets: { lemons: 0, sugar: 0, ice: 0 },
+          standHistory: {},
+        },
+      ],
+    }
+    room = updatePlayerPlan(room, 'player-host', {
+      purchases: { lemons: 0, sugar: 0, ice: 0 },
+      recipe: { lemons: 2, sugar: 2, ice: 2 },
       price: 0.5,
     })
-    soldOutRoom = updatePlayerPlan(soldOutRoom, 'player-guest', {
+    room = updatePlayerPlan(room, 'player-guest', {
+      purchases: { lemons: 6, sugar: 6, ice: 6 },
+      recipe: { lemons: 1, sugar: 2, ice: 1 },
+      price: 1.4,
+    })
+    room = setPlayerReady(setPlayerReady(room, 'player-host', true), 'player-guest', true)
+
+    const simulated = startSimulationWithTelemetry(room, {}, {
+      ...defaultBalanceConfig,
+      customerTastePreferenceWeight: 0.2,
+      weatherProfiles: {
+        ...defaultBalanceConfig.weatherProfiles,
+        sunny: {
+          ...defaultBalanceConfig.weatherProfiles.sunny,
+          customerCount: 1,
+          baseWillingnessToPay: 2,
+          willingnessVariance: 0,
+        },
+      },
+    })
+
+    expect(simulated.telemetry.customerEvents).toEqual([
+      expect.objectContaining({
+        customerId: 'reroute-customer',
+        chosenPlayerId: 'player-guest',
+        outcome: 'buy',
+        outcomeReason: 'purchased_after_sold_out_reroute',
+        rerouteCount: 1,
+      }),
+    ])
+    expect(simulated.telemetry.customerOfferScores).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          playerId: 'player-host',
+          selectionRound: 1,
+          offerResult: 'selected_but_sold_out',
+        }),
+        expect.objectContaining({
+          playerId: 'player-guest',
+          selectionRound: 2,
+          offerResult: 'selected',
+        }),
+      ]),
+    )
+
+    const host = simulated.room.players.find((player) => player.id === 'player-host')
+    const guest = simulated.room.players.find((player) => player.id === 'player-guest')
+    const event = simulated.room.simulation?.events[0]
+
+    expect(host?.dailyResults.customersWon).toBe(0)
+    expect(host?.dailyResults.customersSoldOut).toBe(1)
+    expect(guest?.dailyResults.customersWon).toBe(1)
+    expect(guest?.dailyResults.cupsSold).toBe(1)
+    expect(event?.targetPlayerId).toBe('player-guest')
+    expect(event?.standStops).toEqual([
+      expect.objectContaining({
+        playerId: 'player-host',
+      }),
+      expect.objectContaining({
+        playerId: 'player-guest',
+      }),
+    ])
+    expect(event?.standStops[0]?.departAt).toBe(event?.standStops[0]?.arriveAt)
+    expect((event?.standStops[1]?.departAt ?? 0) - (event?.standStops[1]?.arriveAt ?? 0)).toBe(1000)
+    expect((event?.standStops[1]?.arriveAt ?? 0) - (event?.standStops[0]?.departAt ?? 0)).toBeGreaterThan(0)
+  })
+
+  it('attaches recipe feedback hints to customer events for upgraded players only', () => {
+    let room = createPlanningRoom(19)
+    room = {
+      ...room,
+      weather: 'sunny',
+      marketBasePrices: {
+        lemons: 0.3,
+        sugar: 0.2,
+        ice: 0.1,
+      },
+      customerRoster: [
+        {
+          id: 'hint-customer',
+          tasteOffsets: { lemons: 0, sugar: 0, ice: 0 },
+          standHistory: {},
+        },
+      ],
+      players: room.players.map((player) =>
+        player.id === 'player-host'
+          ? {
+              ...player,
+              ownedUpgrades: {
+                recipeFeedbackHints: true,
+              },
+            }
+          : player,
+      ),
+    }
+    room = updatePlayerPlan(room, 'player-host', {
+      purchases: { lemons: 6, sugar: 6, ice: 6 },
+      recipe: { lemons: 1, sugar: 3, ice: 5 },
+      price: 1.2,
+    })
+    room = updatePlayerPlan(room, 'player-guest', {
+      purchases: { lemons: 6, sugar: 6, ice: 6 },
+      recipe: { lemons: 2, sugar: 2, ice: 2 },
+      price: 2.5,
+    })
+    room = setPlayerReady(setPlayerReady(room, 'player-host', true), 'player-guest', true)
+
+    const simulated = startSimulationWithTelemetry(room, {}, {
+      ...defaultBalanceConfig,
+      customerTastePreferenceWeight: 0.2,
+      weatherProfiles: {
+        ...defaultBalanceConfig.weatherProfiles,
+        sunny: {
+          ...defaultBalanceConfig.weatherProfiles.sunny,
+          customerCount: 1,
+          baseWillingnessToPay: 2,
+          willingnessVariance: 0,
+        },
+      },
+    })
+    const event = simulated.room.simulation?.events[0]
+
+    expect(event?.outcome).toBe('buy')
+    expect(event?.feedbackHintsByPlayerId?.['player-host']).toEqual({
+      ingredient: 'ice',
+      direction: 'less',
+    })
+    expect(event?.feedbackHintsByPlayerId?.['player-guest']).toBeUndefined()
+  })
+
+  it('ends rerouted customers as skipped when every reroute path is exhausted', () => {
+    let room = createPlanningRoom(9)
+    room = {
+      ...room,
+      weather: 'sunny',
+      marketBasePrices: {
+        lemons: 0.3,
+        sugar: 0.2,
+        ice: 0.1,
+      },
+      customerRoster: [
+        {
+          id: 'exhausted-customer',
+          tasteOffsets: { lemons: 0, sugar: 0, ice: 0 },
+          standHistory: {},
+        },
+      ],
+    }
+    room = updatePlayerPlan(room, 'player-host', {
+      purchases: { lemons: 0, sugar: 0, ice: 0 },
+      recipe: { lemons: 2, sugar: 2, ice: 2 },
+      price: 0.5,
+    })
+    room = updatePlayerPlan(room, 'player-guest', {
+      purchases: { lemons: 0, sugar: 0, ice: 0 },
+      recipe: { lemons: 2, sugar: 2, ice: 2 },
+      price: 1.2,
+    })
+    room = setPlayerReady(setPlayerReady(room, 'player-host', true), 'player-guest', true)
+
+    const simulated = startSimulationWithTelemetry(room, {}, {
+      ...defaultBalanceConfig,
+      customerTastePreferenceWeight: 0.2,
+      weatherProfiles: {
+        ...defaultBalanceConfig.weatherProfiles,
+        sunny: {
+          ...defaultBalanceConfig.weatherProfiles.sunny,
+          customerCount: 1,
+          baseWillingnessToPay: 2,
+          willingnessVariance: 0,
+        },
+      },
+    })
+
+    expect(simulated.telemetry.customerEvents).toEqual([
+      expect.objectContaining({
+        customerId: 'exhausted-customer',
+        chosenPlayerId: null,
+        outcome: 'skip',
+        outcomeReason: 'reroute_exhausted_after_sold_out',
+        rerouteCount: 2,
+      }),
+    ])
+    expect(simulated.telemetry.customerOfferScores).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          playerId: 'player-guest',
+          selectionRound: 1,
+          offerResult: 'selected_but_sold_out',
+        }),
+        expect.objectContaining({
+          playerId: 'player-host',
+          selectionRound: 2,
+          offerResult: 'selected_but_sold_out',
+        }),
+      ]),
+    )
+    const event = simulated.room.simulation?.events[0]
+
+    expect(event?.standStops).toEqual([
+      expect.objectContaining({
+        playerId: 'player-guest',
+      }),
+      expect.objectContaining({
+        playerId: 'player-host',
+      }),
+    ])
+    expect(event?.standStops[0]?.departAt).toBe(event?.standStops[0]?.arriveAt)
+    expect(event?.standStops[1]?.departAt).toBe(event?.standStops[1]?.arriveAt)
+    expect((event?.standStops[1]?.arriveAt ?? 0) - (event?.standStops[0]?.departAt ?? 0)).toBeGreaterThan(0)
+  })
+
+  it('creates sequential stand stops for multiplayer customers moving left to right', () => {
+    let room = createPlanningRoom(41)
+    room = {
+      ...room,
+      weather: 'sunny',
+      marketBasePrices: {
+        lemons: 0.3,
+        sugar: 0.2,
+        ice: 0.1,
+      },
+      customerRoster: [
+        {
+          id: 'customer-right',
+          tasteOffsets: { lemons: 0, sugar: 0, ice: 0 },
+          standHistory: {},
+        },
+      ],
+    }
+    room = updatePlayerPlan(room, 'player-host', {
+      purchases: { lemons: 6, sugar: 6, ice: 6 },
+      recipe: { lemons: 2, sugar: 2, ice: 2 },
+      price: 2.3,
+    })
+    room = updatePlayerPlan(room, 'player-guest', {
+      purchases: { lemons: 6, sugar: 6, ice: 6 },
+      recipe: { lemons: 2, sugar: 2, ice: 2 },
+      price: 1.5,
+    })
+    room = setPlayerReady(setPlayerReady(room, 'player-host', true), 'player-guest', true)
+
+    const simulated = startSimulation(room, {}, {
+      ...defaultBalanceConfig,
+      weatherProfiles: {
+        ...defaultBalanceConfig.weatherProfiles,
+        sunny: {
+          ...defaultBalanceConfig.weatherProfiles.sunny,
+          customerCount: 1,
+          baseWillingnessToPay: 2,
+          willingnessVariance: 0,
+        },
+      },
+    })
+
+    const event = simulated.simulation?.events[0]
+
+    expect(event).toBeDefined()
+    expect(event?.targetPlayerId).toBe('player-guest')
+    expect(event?.standStops.map((stop) => stop.playerId)).toEqual(['player-host', 'player-guest'])
+    expect(event?.standStops[0]).toEqual({
+      playerId: 'player-host',
+      arriveAt: 1_380,
+      departAt: 2_380,
+    })
+    expect(event?.standStops[1]).toEqual({
+      playerId: 'player-guest',
+      arriveAt: 3_220,
+      departAt: 4_220,
+    })
+    expect(event?.outcomeAt).toBe(4_220)
+    expect(event?.exitAt).toBe(5_300)
+    expect(simulated.simulation?.durationMs).toBeGreaterThanOrEqual(5_300)
+  })
+
+  it('keeps the last customer active near the end of the simulation timeline', () => {
+    let room = createPlanningRoom(27)
+    room = {
+      ...room,
+      weather: 'sunny',
+      marketBasePrices: {
+        lemons: 0.5,
+        sugar: 0.2,
+        ice: 0.1,
+      },
+    }
+    room = updatePlayerPlan(room, 'player-host', {
+      purchases: { lemons: 20, sugar: 20, ice: 20 },
+      recipe: { lemons: 2, sugar: 2, ice: 2 },
+      price: 2.3,
+    })
+    room = updatePlayerPlan(room, 'player-guest', {
+      purchases: { lemons: 20, sugar: 20, ice: 20 },
+      recipe: { lemons: 2, sugar: 2, ice: 2 },
+      price: 1.5,
+    })
+    room = setPlayerReady(setPlayerReady(room, 'player-host', true), 'player-guest', true)
+
+    const simulated = startSimulation(room, {}, {
+      ...defaultBalanceConfig,
+      weatherProfiles: {
+        ...defaultBalanceConfig.weatherProfiles,
+        sunny: {
+          ...defaultBalanceConfig.weatherProfiles.sunny,
+          customerCount: 6,
+          baseWillingnessToPay: 2,
+          willingnessVariance: 0,
+        },
+      },
+    })
+
+    const durationMs = simulated.simulation?.durationMs ?? 0
+    const lastExitAt = Math.max(...(simulated.simulation?.events ?? []).map((event) => event.exitAt))
+
+    expect(durationMs).toBe(defaultBalanceConfig.simulationDurationMs)
+    expect(lastExitAt).toBeGreaterThanOrEqual(durationMs - 500)
+    expect(lastExitAt).toBeLessThan(durationMs)
+  })
+
+  it('records day history entries and preserves them into the next planning day', () => {
+    let room = createPlanningRoom(91)
+    room = {
+      ...room,
+      weather: 'sunny',
+      marketBasePrices: {
+        lemons: 0.5,
+        sugar: 0.25,
+        ice: 0.1,
+      },
+    }
+    room = updatePlayerPlan(room, 'player-host', {
+      purchases: {
+        lemons: 6,
+        sugar: 6,
+        ice: 6,
+      },
+      price: 1.1,
+    })
+    room = updatePlayerPlan(room, 'player-guest', {
+      purchases: {
+        lemons: 3,
+        sugar: 3,
+        ice: 3,
+      },
       price: 3,
     })
-    soldOutRoom = setPlayerReady(setPlayerReady(soldOutRoom, 'player-host', true), 'player-guest', true)
+    room = setPlayerReady(setPlayerReady(room, 'player-host', true), 'player-guest', true)
 
-    const soldOut = startSimulationWithTelemetry(soldOutRoom)
-    const soldOutEvent = soldOut.telemetry.customerEvents.find((event) => event.outcomeReason === 'selected_stand_sold_out')
+    const simulated = startSimulation(room, {}, {
+      ...defaultBalanceConfig,
+      weatherProfiles: {
+        ...defaultBalanceConfig.weatherProfiles,
+        sunny: {
+          ...defaultBalanceConfig.weatherProfiles.sunny,
+          customerCount: 1,
+          baseWillingnessToPay: 2,
+          willingnessVariance: 0,
+        },
+      },
+    })
+    const hostResults = simulated.players.find((player) => player.id === 'player-host')
+    const nextDay = beginNextDay(enterResultsPhase(simulated))
+    const nextDayHost = nextDay.players.find((player) => player.id === 'player-host')
 
-    expect(soldOutEvent).toBeDefined()
-    expect(
-      soldOut.telemetry.customerOfferScores.some(
-        (score) =>
-          score.customerEventId === soldOutEvent?.customerEventId &&
-          score.playerId === 'player-host' &&
-          score.offerResult === 'selected_but_sold_out',
-      ),
-    ).toBe(true)
+    expect(hostResults?.history).toEqual([
+      expect.objectContaining({
+        day: 1,
+        revenue: 1.1,
+        purchaseCost: 5.1,
+        profit: -4,
+        endingMoney: hostResults?.money,
+        reputationAfter: hostResults?.reputation,
+        cupsSold: 1,
+        recipeSnapshot: {
+          lemons: 2,
+          sugar: 2,
+          ice: 2,
+        },
+      }),
+    ])
+    expect(nextDayHost?.history).toEqual(hostResults?.history)
+    expect(nextDayHost?.dailyResults.cupsSold).toBe(0)
   })
 
   it('carries money, inventory, and reputation into the next planning day', () => {
@@ -522,6 +1024,19 @@ describe('multiplayer engine', () => {
       },
       price: 1.2,
     })
+    room = {
+      ...room,
+      players: room.players.map((player) =>
+        player.id === 'player-host'
+          ? {
+              ...player,
+              ownedUpgrades: {
+                recipeFeedbackHints: true,
+              },
+            }
+          : player,
+      ),
+    }
     room = setPlayerReady(setPlayerReady(room, 'player-host', true), 'player-guest', true)
 
     const simulated = startSimulation(room)
@@ -535,6 +1050,7 @@ describe('multiplayer engine', () => {
     expect(host?.money).not.toBe(defaultBalanceConfig.startingMoney)
     expect(host?.dailyResults.cupsSold).toBe(0)
     expect(host?.isReady).toBe(false)
+    expect(host?.ownedUpgrades?.recipeFeedbackHints).toBe(true)
   })
 })
 
@@ -579,6 +1095,7 @@ describe('calculatePerIngredientCapacity', () => {
 describe('persistent customer profiles', () => {
   const persistentBalance = {
     ...defaultBalanceConfig,
+    customerTastePreferenceWeight: 1,
     weatherProfiles: {
       sunny: {
         ...defaultBalanceConfig.weatherProfiles.sunny,

@@ -10,6 +10,7 @@ import type {
   MarketBasePrices,
   PlayerState,
   RoomState,
+  RunUpgradeId,
   Weather,
 } from './contracts'
 import { RoomManager, type RoomGameHooks } from './room-manager'
@@ -73,6 +74,13 @@ function createHooks(): RoomGameHooks {
         rngSeed: day,
       }
     },
+    getUpgradeCost(upgradeId: RunUpgradeId): number {
+      if (upgradeId !== 'recipe-feedback-hints') {
+        throw new Error('Unknown upgrade.')
+      }
+
+      return 25
+    },
     startSimulation(room: RoomState, simulationStartAt: number): { room: RoomState; telemetry: SimulationTelemetry } {
       return {
         room: {
@@ -82,12 +90,26 @@ function createHooks(): RoomGameHooks {
             customerEvents: [
               {
                 id: 'event-1',
-                arrivalOffsetMs: 0,
+                customerId: 'customer-1',
+                customerIndex: 0,
+                spawnAt: 0,
+                outcomeAt: 1_500,
+                exitAt: 2_000,
+                standStops: [
+                  {
+                    playerId: room.players[0]?.id ?? 'host-1',
+                    arriveAt: 500,
+                    departAt: 1_500,
+                  },
+                ],
                 willingnessToPay: 2,
-                chosenPlayerId: room.players[0]?.id ?? null,
+                targetPlayerId: room.players[0]?.id ?? null,
                 outcome: 'buy',
                 salePrice: 1.5,
                 satisfaction: 0.9,
+                lane: 0,
+                xJitter: 0,
+                yJitter: 0,
               },
             ],
             simulationStartAt,
@@ -107,6 +129,26 @@ function createHooks(): RoomGameHooks {
                     customersSoldOut: 0,
                   }
                 : null,
+            history:
+              index === 0
+                ? [
+                    {
+                      day: room.day,
+                      revenue: 1.5,
+                      purchaseCost: 0.9,
+                      profit: 0.6,
+                      endingMoney: player.money + 1.5,
+                      reputationAfter: player.reputation + 2,
+                      cupsSold: 1,
+                      satisfaction: 0.9,
+                      recipeSnapshot: {
+                        lemons: 2,
+                        sugar: 2,
+                        ice: 2,
+                      },
+                    },
+                  ]
+                : [],
           })),
         },
         telemetry: {
@@ -132,14 +174,36 @@ function createHooks(): RoomGameHooks {
         })),
       }
     },
-    createPlayerDefaults(): Pick<PlayerState, 'money' | 'inventory' | 'reputation'> {
+    createPlayerDefaults(): Pick<PlayerState, 'money' | 'inventory' | 'reputation' | 'ownedUpgrades'> {
       return {
         money: 20,
         inventory: emptyInventory(),
         reputation: 50,
+        ownedUpgrades: {
+          recipeFeedbackHints: false,
+        },
       }
     },
   }
+}
+
+function createRichManager(now = 10_000): RoomManager {
+  return new RoomManager(
+    {
+      ...createHooks(),
+      createPlayerDefaults() {
+        return {
+          money: 30,
+          inventory: emptyInventory(),
+          reputation: 50,
+          ownedUpgrades: {
+            recipeFeedbackHints: false,
+          },
+        }
+      },
+    },
+    () => now,
+  )
 }
 
 function createManager(now = 10_000): RoomManager {
@@ -155,7 +219,8 @@ function createMultiplayerRoom(manager: RoomManager): RoomState {
     analyticsPlayerId: 'analytics-host',
     gameMode: 'multiplayer',
     targetPlayerCount: 2,
-  })
+    runLengthDays: 14,
+  } as unknown as Parameters<RoomManager['createRoom']>[0])
 }
 
 function createScaledMultiplayerRoom(
@@ -170,6 +235,7 @@ function createScaledMultiplayerRoom(
     analyticsPlayerId: 'analytics-host',
     gameMode: 'multiplayer',
     targetPlayerCount,
+    runLengthDays: 14,
   })
 }
 
@@ -182,7 +248,12 @@ function createSingleplayerRoom(manager: RoomManager): RoomState {
     analyticsPlayerId: 'analytics-solo-host',
     gameMode: 'singleplayer',
     targetPlayerCount: 1,
-  })
+    runLengthDays: 14,
+  } as unknown as Parameters<RoomManager['createRoom']>[0])
+}
+
+function overwriteStoredRoom(manager: RoomManager, room: RoomState): void {
+  ;((manager as unknown as { rooms: Map<string, RoomState> }).rooms).set(room.roomId, room)
 }
 
 describe('RoomManager', () => {
@@ -196,6 +267,7 @@ describe('RoomManager', () => {
     expect(room.phase).toBe('lobby')
     expect(room.gameMode).toBe('multiplayer')
     expect(room.targetPlayerCount).toBe(2)
+    expect((room as RoomState & { runLengthDays?: number }).runLengthDays).toBe(14)
     expect(room.players).toHaveLength(1)
     expect(room.players[0]?.connectionStatus).toBe('connected')
   })
@@ -256,6 +328,51 @@ describe('RoomManager', () => {
     expect(thirdPlayerRoom.players).toHaveLength(3)
     expect(fourthPlayerRoom.phase).toBe('planning')
     expect(fourthPlayerRoom.players).toHaveLength(4)
+  })
+
+  it('keeps a three-player room in the lobby until the third player joins', () => {
+    const manager = createManager()
+    createScaledMultiplayerRoom(manager, 3)
+
+    const secondPlayerRoom = manager.joinRoom({
+      roomId: 'ROOM01',
+      name: 'Guest 2',
+      faction: FACTION_BETA,
+      analyticsPlayerId: 'analytics-guest-2',
+    })
+    const thirdPlayerRoom = manager.joinRoom({
+      roomId: 'ROOM01',
+      name: 'Guest 3',
+      faction: FACTION_ALPHA,
+      analyticsPlayerId: 'analytics-guest-3',
+    })
+
+    expect(secondPlayerRoom.phase).toBe('lobby')
+    expect(secondPlayerRoom.players).toHaveLength(2)
+    expect(thirdPlayerRoom.phase).toBe('planning')
+    expect(thirdPlayerRoom.players).toHaveLength(3)
+  })
+
+  it('purchases the recipe feedback hint upgrade during planning and deducts the cost', () => {
+    const manager = createRichManager()
+    createMultiplayerRoom(manager)
+    manager.joinRoom({
+      roomId: 'ROOM01',
+      name: 'Guest',
+      faction: FACTION_BETA,
+      analyticsPlayerId: 'analytics-guest',
+    })
+
+    const room = manager.purchaseUpgrade({
+      roomId: 'ROOM01',
+      playerId: 'host-1',
+      upgradeId: 'recipe-feedback-hints',
+    })
+
+    const host = room.players.find((player) => player.id === 'host-1')
+
+    expect(host?.money).toBe(5)
+    expect(host?.ownedUpgrades?.recipeFeedbackHints).toBe(true)
   })
 
   it('starts simulation automatically once both players submit plans', () => {
@@ -332,6 +449,44 @@ describe('RoomManager', () => {
     expect(thirdResult.simulationStartedAt).toBeNull()
     expect(fourthResult.room.phase).toBe('simulating')
     expect(fourthResult.simulationStartedAt).toBe(13_000)
+  })
+
+  it('waits for all three players before starting simulation', () => {
+    const manager = createManager(12_000)
+    createScaledMultiplayerRoom(manager, 3)
+    manager.joinRoom({
+      roomId: 'ROOM01',
+      name: 'Guest 2',
+      faction: FACTION_BETA,
+      analyticsPlayerId: 'analytics-guest-2',
+    })
+    manager.joinRoom({
+      roomId: 'ROOM01',
+      name: 'Guest 3',
+      faction: FACTION_ALPHA,
+      analyticsPlayerId: 'analytics-guest-3',
+    })
+
+    manager.submitPlan({
+      roomId: 'ROOM01',
+      playerId: 'host-1',
+      plan: DEFAULT_PLAN,
+    })
+    const secondResult = manager.submitPlan({
+      roomId: 'ROOM01',
+      playerId: 'room01-player-2',
+      plan: DEFAULT_PLAN,
+    })
+    const thirdResult = manager.submitPlan({
+      roomId: 'ROOM01',
+      playerId: 'room01-player-3',
+      plan: DEFAULT_PLAN,
+    })
+
+    expect(secondResult.room.phase).toBe('planning')
+    expect(secondResult.simulationStartedAt).toBeNull()
+    expect(thirdResult.room.phase).toBe('simulating')
+    expect(thirdResult.simulationStartedAt).toBe(13_000)
   })
 
   it('starts simulation immediately once the solo player submits a plan', () => {
@@ -517,6 +672,7 @@ describe('RoomManager', () => {
   it('rejects unsupported multiplayer player counts', () => {
     const manager = createManager()
 
+    expect(() => createScaledMultiplayerRoom(manager, 1)).toThrow()
     expect(() => createScaledMultiplayerRoom(manager, 5)).toThrow()
   })
 
@@ -538,5 +694,112 @@ describe('RoomManager', () => {
     expect(nextDayRoom.phase).toBe('planning')
     expect(nextDayRoom.day).toBe(2)
     expect(nextDayRoom.requestedNextDayPlayerIds).toEqual([])
+  })
+
+  it('marks the run complete on the final multiplayer day using reputation as the tiebreaker', () => {
+    const manager = createManager()
+    createMultiplayerRoom(manager)
+    manager.joinRoom({
+      roomId: 'ROOM01',
+      name: 'Guest',
+      faction: FACTION_BETA,
+      analyticsPlayerId: 'analytics-guest',
+    })
+
+    const room = manager.getRoom('ROOM01')!
+    overwriteStoredRoom(manager, {
+      ...room,
+      day: 14,
+      phase: 'simulating',
+      runLengthDays: 14,
+      isGameComplete: false,
+      finalOutcome: null,
+      simulation: {
+        customerEvents: [],
+        simulationStartAt: 12_000,
+        durationMs: 6_000,
+      },
+      players: room.players.map((player) =>
+        player.id === 'host-1'
+          ? {
+              ...player,
+              money: 32,
+              reputation: 54,
+              dailyResults: {
+                cupsSold: 8,
+                revenue: 12,
+                satisfaction: 0.7,
+                reputationDelta: 2,
+                customersWon: 8,
+                customersSkipped: 4,
+                customersSoldOut: 0,
+              },
+            }
+          : {
+              ...player,
+              money: 32,
+              reputation: 61,
+              dailyResults: {
+                cupsSold: 10,
+                revenue: 15,
+                satisfaction: 0.8,
+                reputationDelta: 3,
+                customersWon: 10,
+                customersSkipped: 3,
+                customersSoldOut: 0,
+              },
+            },
+      ),
+    } as RoomState)
+
+    const completedRoom = manager.completeSimulation('ROOM01') as RoomState & {
+      runLengthDays: number
+      isGameComplete: boolean
+      finalOutcome: { winnerPlayerIds: string[]; decidedBy: string } | null
+    }
+
+    expect(completedRoom.phase).toBe('results')
+    expect(completedRoom.isGameComplete).toBe(true)
+    expect(completedRoom.finalOutcome).toEqual({
+      winnerPlayerIds: ['room01-player-2'],
+      decidedBy: 'reputation',
+    })
+  })
+
+  it('rejects next-day requests once the run is complete', () => {
+    const manager = createManager()
+    createSingleplayerRoom(manager)
+
+    const room = manager.getRoom('SOLO1')!
+    overwriteStoredRoom(manager, {
+      ...room,
+      day: 14,
+      phase: 'results',
+      runLengthDays: 14,
+      isGameComplete: true,
+      finalOutcome: {
+        winnerPlayerIds: ['solo-host'],
+        decidedBy: 'money',
+      },
+      players: room.players.map((player) => ({
+        ...player,
+        dailyResults: {
+          cupsSold: 11,
+          revenue: 16.5,
+          satisfaction: 0.74,
+          reputationDelta: 3,
+          customersWon: 11,
+          customersSkipped: 2,
+          customersSoldOut: 0,
+        },
+      })),
+    } as RoomState)
+
+    expect(() =>
+      manager.requestNextDay({
+        roomId: 'SOLO1',
+        playerId: 'solo-host',
+      }),
+    ).toThrow('This run is already complete.')
   })
 })
