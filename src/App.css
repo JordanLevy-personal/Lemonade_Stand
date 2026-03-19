@@ -412,6 +412,18 @@
   color: #14363b;
 }
 
+.sold-out-sign {
+  border-radius: 999px;
+  background: linear-gradient(180deg, #ff847c, #d7263d);
+  box-shadow: 0 10px 18px rgba(215, 38, 61, 0.24);
+  color: #fff7f5;
+  font-size: 0.85rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  padding: 0.35rem 0.9rem;
+  text-transform: uppercase;
+}
+
 .stand-sprite {
   width: 11rem;
   filter: drop-shadow(0 12px 20px rgba(17, 54, 59, 0.25));

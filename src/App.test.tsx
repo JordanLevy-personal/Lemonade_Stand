@@ -547,6 +547,50 @@ describe('App', () => {
     expect(screen.getByText(/\$1\.53/)).toBeInTheDocument()
   })
 
+  it('keeps the local planning draft when another multiplayer player locks in first', () => {
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'room_state',
+      room: createRoom(),
+    })
+
+    fireEvent.change(screen.getByLabelText(/lemons @/i), {
+      target: { value: '4' },
+    })
+    fireEvent.change(screen.getByLabelText(/price per cup/i), {
+      target: { value: '1.75' },
+    })
+
+    emitMessage({
+      type: 'room_state',
+      room: createRoom({
+        players: createRoom().players.map((player) =>
+          player.id === 'player-guest'
+            ? {
+                ...player,
+                hasSubmittedPlan: true,
+              }
+            : player,
+        ),
+      }),
+    })
+
+    expect(screen.getByLabelText(/lemons @/i)).toHaveValue(4)
+    expect(screen.getByLabelText(/price per cup/i)).toHaveValue(1.75)
+  })
+
   it('updates the ingredient cost per cup when the recipe changes', () => {
     render(<App />)
 
@@ -990,6 +1034,90 @@ describe('App', () => {
 
     const leftAfterPassThrough = Number.parseFloat(customer.style.left)
     expect(leftAfterPassThrough).toBeGreaterThan(leftBeforePassThrough)
+  })
+
+  it('shows a sold out sign once a stand can no longer serve another cup', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-03-16T12:00:00.000Z'))
+
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'simulation_started',
+      simulationStartAt: Date.parse('2026-03-16T12:00:00.000Z'),
+      room: createHostRoom(
+        {
+          inventory: {
+            lemons: 4,
+            sugar: 4,
+            ice: 4,
+          },
+          dailyPlan: {
+            purchases: {
+              lemons: 0,
+              sugar: 0,
+              ice: 0,
+            },
+            recipe: {
+              lemons: 2,
+              sugar: 2,
+              ice: 2,
+            },
+            price: 1.5,
+          },
+        },
+        {
+          phase: 'simulating',
+          simulation: {
+            durationMs: 4000,
+            simulationStartAt: Date.parse('2026-03-16T12:00:00.000Z'),
+            customerEvents: [
+              createSimulationEvent({
+                outcome: 'buy',
+                outcomeAt: 900,
+                exitAt: 1800,
+              }),
+              createSimulationEvent({
+                id: 'event-b',
+                customerId: 'customer-b',
+                customerIndex: 1,
+                spawnAt: 1000,
+                outcomeAt: 1900,
+                exitAt: 2800,
+              }),
+            ],
+          },
+        },
+      ),
+    })
+
+    const alexStandColumn = screen.getByAltText(/alex stand/i).closest('.stand-column') as HTMLElement
+    const alexStand = within(alexStandColumn)
+
+    expect(alexStand.queryByText(/sold out/i)).toBeNull()
+
+    act(() => {
+      vi.advanceTimersByTime(1_100)
+    })
+
+    expect(alexStand.queryByText(/sold out/i)).toBeNull()
+
+    act(() => {
+      vi.advanceTimersByTime(900)
+    })
+
+    expect(alexStand.getByText(/sold out/i)).toBeInTheDocument()
   })
 
   it('requests the next day from the results screen', () => {
