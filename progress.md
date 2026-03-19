@@ -53,3 +53,11 @@ Original prompt: ok lets add a quick feature for computing the amount of cups th
 - Introduced a reusable `RangeSliderField`, swapped the three recipe controls to it, and styled the slider presentation to match the current planning UI.
 - Validation passed with targeted App tests, the full Vitest suite, a production build, the required `web_game_playwright_client` run, and a two-page Playwright browser sanity pass with screenshot artifact `output/web-game/recipe-sliders-planning/host-planning.png`.
 - Browser sanity showed the planning screen rendering the slider controls correctly with no host/guest console errors during the live host/join flow.
+
+## 2026-03-19 10:05:47 PDT
+
+- Started a new task workspace at `tasks/active/weather-daylight-simulation/` on `codex/weather-daylight-simulation` to restore simulation weather atmosphere and replace the percentage timeline with a business clock.
+- Added App-level TDD coverage for the new clock labels, speed-driven time progression, and simulation scene weather/time state while preserving solo and multiplayer stand rendering expectations.
+- Reworked the simulation presentation into a weather-aware scene with a continuous sky gradient tied to simulation progress, then removed the temporary skyline props after browser review showed they looked like stray floating assets.
+- Validation passed with `npm test -- --run src/App.test.tsx`, the full Vitest suite, a production build, the required `web_game_playwright_client` run, and live browser inspection of hot/raining solo simulations on the LAN stack.
+- Playtest telemetry review outcome: `no change`, because the feature is presentation-only and existing telemetry already captures the gameplay-relevant raw inputs and outcomes.

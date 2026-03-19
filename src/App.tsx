@@ -30,6 +30,7 @@ import type {
   GameMode,
   RoomState,
   SimulationStartedMessage,
+  Weather,
 } from './client/protocol'
 import { openRoomConnection, type RoomConnection, type RoomConnectionHandlers } from './client/socket'
 
@@ -46,9 +47,23 @@ const SATISFACTION_APPROVAL_THRESHOLD = 0.55
 const BASE_SIMULATION_SPEED = 1
 const MIN_DEV_SIMULATION_SPEED = 0.25
 const MAX_DEV_SIMULATION_SPEED = 2
+const BUSINESS_DAY_START_MINUTES = 8 * 60
+const BUSINESS_DAY_END_MINUTES = 18 * 60
 const SHOW_DEV_CONTROLS = import.meta.env.DEV || import.meta.env.MODE === 'test'
 
 type ResultsChartMetric = 'revenue' | 'profit' | 'reputation'
+type SceneTimeOfDay = 'morning' | 'midday' | 'afternoon' | 'dusk'
+type HslColor = [number, number, number]
+
+interface SceneVisualKeyframe {
+  progress: number
+  skyTop: HslColor
+  skyBottom: HslColor
+  groundTop: HslColor
+  groundBottom: HslColor
+  sunX: number
+  sunY: number
+}
 
 interface StoredRoomSession {
   roomId: string
@@ -290,6 +305,178 @@ function currentElapsedMsWithSpeed(
 
 function interpolate(start: number, end: number, progress: number): number {
   return start + (end - start) * clamp(progress, 0, 1)
+}
+
+function simulationProgress(elapsedMs: number, durationMs: number): number {
+  return clamp(elapsedMs / Math.max(durationMs, 1), 0, 1)
+}
+
+function interpolateStops(progress: number, stops: readonly [number, number][]): number {
+  const clampedProgress = clamp(progress, 0, 1)
+
+  for (let index = 0; index < stops.length - 1; index += 1) {
+    const [startProgress, startValue] = stops[index]!
+    const [endProgress, endValue] = stops[index + 1]!
+
+    if (clampedProgress <= endProgress) {
+      const rangeProgress =
+        endProgress === startProgress
+          ? 0
+          : (clampedProgress - startProgress) / (endProgress - startProgress)
+      return interpolate(startValue, endValue, rangeProgress)
+    }
+  }
+
+  return stops[stops.length - 1]![1]
+}
+
+function interpolateColor(progress: number, stops: readonly [number, HslColor][]): HslColor {
+  return [
+    interpolateStops(progress, stops.map(([stopProgress, color]) => [stopProgress, color[0]] as const)),
+    interpolateStops(progress, stops.map(([stopProgress, color]) => [stopProgress, color[1]] as const)),
+    interpolateStops(progress, stops.map(([stopProgress, color]) => [stopProgress, color[2]] as const)),
+  ]
+}
+
+function hslColorString([hue, saturation, lightness]: HslColor): string {
+  return `hsl(${Math.round(hue)} ${Math.round(saturation)}% ${Math.round(lightness)}%)`
+}
+
+function sceneVisualStyle(progress: number, weather: Weather): CSSProperties {
+  const keyframes: readonly SceneVisualKeyframe[] = [
+    {
+      progress: 0,
+      skyTop: [201, 96, 93],
+      skyBottom: [46, 82, 84],
+      groundTop: [88, 54, 63],
+      groundBottom: [101, 38, 55],
+      sunX: 8,
+      sunY: 14,
+    },
+    {
+      progress: 0.5,
+      skyTop: [198, 92, 87],
+      skyBottom: [74, 76, 88],
+      groundTop: [91, 56, 63],
+      groundBottom: [102, 41, 54],
+      sunX: 48,
+      sunY: 10,
+    },
+    {
+      progress: 1,
+      skyTop: [215, 38, 69],
+      skyBottom: [27, 82, 68],
+      groundTop: [95, 39, 59],
+      groundBottom: [98, 28, 44],
+      sunX: 84,
+      sunY: 18,
+    },
+  ]
+
+  const skyTop = interpolateColor(
+    progress,
+    keyframes.map((frame) => [frame.progress, frame.skyTop] as const),
+  )
+  const skyBottom = interpolateColor(
+    progress,
+    keyframes.map((frame) => [frame.progress, frame.skyBottom] as const),
+  )
+  const groundTop = interpolateColor(
+    progress,
+    keyframes.map((frame) => [frame.progress, frame.groundTop] as const),
+  )
+  const groundBottom = interpolateColor(
+    progress,
+    keyframes.map((frame) => [frame.progress, frame.groundBottom] as const),
+  )
+
+  let sunOpacity = interpolate(0.95, 0.35, progress)
+  let hazeOpacity = 0.08 + progress * 0.12
+  let cloudOpacity = 0.28 + progress * 0.12
+  let rainOpacity = 0
+  let saturation = 1
+
+  if (weather === 'hot') {
+    hazeOpacity += 0.14
+    cloudOpacity = 0.16
+    sunOpacity = 1
+  }
+
+  if (weather === 'cloudy') {
+    sunOpacity *= 0.45
+    cloudOpacity = 0.78
+    saturation = 0.9
+  }
+
+  if (weather === 'raining') {
+    sunOpacity = 0.1
+    cloudOpacity = 0.9
+    rainOpacity = 0.95
+    saturation = 0.82
+    hazeOpacity = 0.04
+  }
+
+  const style = {
+    '--scene-sky-top': hslColorString(skyTop),
+    '--scene-sky-bottom': hslColorString(skyBottom),
+    '--scene-ground-top': hslColorString(groundTop),
+    '--scene-ground-bottom': hslColorString(groundBottom),
+    '--scene-sun-x': `${interpolateStops(progress, keyframes.map((frame) => [frame.progress, frame.sunX] as const))}%`,
+    '--scene-sun-y': `${interpolateStops(progress, keyframes.map((frame) => [frame.progress, frame.sunY] as const))}%`,
+    '--scene-sun-opacity': sunOpacity.toFixed(2),
+    '--scene-cloud-opacity': cloudOpacity.toFixed(2),
+    '--scene-haze-opacity': hazeOpacity.toFixed(2),
+    '--scene-rain-opacity': rainOpacity.toFixed(2),
+    '--scene-saturation': saturation.toFixed(2),
+  } satisfies Record<string, string>
+
+  return style as CSSProperties
+}
+
+function formatBusinessClock(progress: number): string {
+  const dayMinutes = BUSINESS_DAY_END_MINUTES - BUSINESS_DAY_START_MINUTES
+  const elapsedMinutes =
+    progress >= 1 ? dayMinutes : Math.floor(dayMinutes * clamp(progress, 0, 1))
+  const totalMinutes = BUSINESS_DAY_START_MINUTES + elapsedMinutes
+  const hour24 = Math.floor(totalMinutes / 60)
+  const minutes = totalMinutes % 60
+  const suffix = hour24 >= 12 ? 'PM' : 'AM'
+  const hour12 = hour24 % 12 === 0 ? 12 : hour24 % 12
+
+  return `${hour12}:${minutes.toString().padStart(2, '0')} ${suffix}`
+}
+
+function sceneTimeOfDay(progress: number): SceneTimeOfDay {
+  if (progress < 0.25) {
+    return 'morning'
+  }
+
+  if (progress < 0.6) {
+    return 'midday'
+  }
+
+  if (progress < 0.85) {
+    return 'afternoon'
+  }
+
+  return 'dusk'
+}
+
+function activeSimulationWeather(room: RoomState): Weather {
+  return room.weather ?? 'sunny'
+}
+
+function timeOfDayLabel(timeOfDay: SceneTimeOfDay): string {
+  switch (timeOfDay) {
+    case 'morning':
+      return 'Morning light'
+    case 'midday':
+      return 'Midday peak'
+    case 'afternoon':
+      return 'Late afternoon'
+    case 'dusk':
+      return 'Closing hour'
+  }
 }
 
 function standXPercent(room: RoomState, playerId: string): number {
@@ -936,6 +1123,12 @@ function SimulationScreen({
   )
   const liveInventory = inventoryForSimulation(currentPlayer, simulation.customerEvents, elapsedMs)
   const visiblePlayers = room.targetPlayerCount === 1 ? room.players.slice(0, 1) : room.players
+  const progress = simulationProgress(elapsedMs, simulation.durationMs)
+  const businessClock = formatBusinessClock(progress)
+  const timeOfDay = sceneTimeOfDay(progress)
+  const weather = activeSimulationWeather(room)
+  const weatherName = weatherLabel(room)
+  const sceneStyle = sceneVisualStyle(progress, weather)
 
   return (
     <section className="app-stage">
@@ -947,12 +1140,16 @@ function SimulationScreen({
             ? 'Your customer wave is live.'
             : 'Shared timeline live. The same customer wave is playing on every connected laptop.'}
         </p>
+        <div className="summary-chip-row">
+          <span className="summary-chip">{weatherName} forecast</span>
+          <span className="summary-chip">{timeOfDayLabel(timeOfDay)}</span>
+        </div>
       </div>
 
       <div className="metric-grid">
         <MetricCard label="Resolved" value={`${resolvedEvents.length}/${simulation.customerEvents.length}`} />
-        <MetricCard label="Weather" value={weatherLabel(room)} />
-        <MetricCard label="Timeline" value={`${Math.round((elapsedMs / simulation.durationMs) * 100)}%`} />
+        <MetricCard label="Weather" value={weatherName} />
+        <MetricCard label="Time" value={businessClock} />
       </div>
 
       {SHOW_DEV_CONTROLS ? (
@@ -977,7 +1174,30 @@ function SimulationScreen({
       ) : null}
 
       <section className="panel crowd-panel">
-        <div className="crowd-scene">
+        <div className="crowd-scene-header">
+          <div>
+            <p className="eyebrow">Business clock</p>
+            <strong className="crowd-clock">{businessClock}</strong>
+          </div>
+          <div className="summary-chip-row">
+            <span className="summary-chip">{weatherName}</span>
+            <span className="summary-chip">{timeOfDayLabel(timeOfDay)}</span>
+          </div>
+        </div>
+        <div
+          aria-label={`Simulation scene, ${weatherName}, ${businessClock}`}
+          className="crowd-scene"
+          data-time-of-day={timeOfDay}
+          data-weather={weather}
+          role="img"
+          style={sceneStyle}
+        >
+          <div className="crowd-sun" aria-hidden="true" />
+          <div className="crowd-cloud crowd-cloud-left" aria-hidden="true" />
+          <div className="crowd-cloud crowd-cloud-right" aria-hidden="true" />
+          <div className="crowd-haze" aria-hidden="true" />
+          <div className="crowd-rain" aria-hidden="true" />
+          <div className="crowd-sidewalk" aria-hidden="true" />
           <div className="crowd-road" aria-hidden="true" />
           {visiblePlayers.map((player, index) => (
             <div
