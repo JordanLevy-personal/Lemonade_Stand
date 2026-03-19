@@ -679,8 +679,16 @@ function shouldShowPurchaseReaction(event: CustomerEvent, elapsedMs: number): bo
   return event.outcome === 'buy' && elapsedMs >= event.outcomeAt && elapsedMs <= event.exitAt
 }
 
+function shouldShowSaleTag(event: CustomerEvent, elapsedMs: number): boolean {
+  return event.outcome === 'buy' && elapsedMs >= event.outcomeAt && elapsedMs <= event.exitAt
+}
+
 function purchaseReactionLabel(event: CustomerEvent): string {
   return event.satisfaction >= SATISFACTION_APPROVAL_THRESHOLD ? '👍' : '👎'
+}
+
+function customerSpriteForEvent(event: CustomerEvent): string {
+  return event.customerIndex % 2 === 0 ? Customer1Sprite : Customer2Sprite
 }
 
 function formatSignedNumber(value: number): string {
@@ -1386,10 +1394,10 @@ function SimulationScreen({
               ) : null}
               <img
                 className="customer-sprite"
-                src={event.id.length % 2 === 0 ? Customer1Sprite : Customer2Sprite}
+                src={customerSpriteForEvent(event)}
                 alt="Customer"
               />
-              {event.outcome === 'buy' ? <span className="sale-tag">+{formatMoney(event.salePrice)}</span> : null}
+              {shouldShowSaleTag(event, elapsedMs) ? <span className="sale-tag">+{formatMoney(event.salePrice)}</span> : null}
             </div>
           ))}
         </div>
