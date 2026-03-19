@@ -52,7 +52,28 @@ const BUSINESS_DAY_START_MINUTES = 8 * 60
 const BUSINESS_DAY_END_MINUTES = 18 * 60
 const SHOW_DEV_CONTROLS = import.meta.env.DEV || import.meta.env.MODE === 'test'
 
-type ResultsChartMetric = 'revenue' | 'profit' | 'reputation'
+type ResultsChartMetric = 'revenue' | 'profit' | 'money' | 'reputation' | 'satisfaction'
+type ResultsChartMode = ResultsChartMetric | 'revenue-profit'
+
+type HistoryEntry = RoomState['players'][number]['history'][number] & {
+  endingMoney?: number
+  recipeSnapshot?: Recipe
+}
+
+type ChartPlayer = RoomState['players'][number] & {
+  history: HistoryEntry[]
+}
+
+type ChartRow = Record<string, number | null> & {
+  day: number
+}
+
+interface ChartSeries {
+  dataKey: string
+  label: string
+  stroke: string
+  dash?: string
+}
 type SceneTimeOfDay = 'morning' | 'midday' | 'afternoon' | 'dusk'
 type HslColor = [number, number, number]
 type DevWeatherOverride = 'live' | Weather
@@ -735,11 +756,19 @@ function formatSignedNumber(value: number): string {
   return `${value >= 0 ? '+' : ''}${value}`
 }
 
-function latestHistoryEntry(player: RoomState['players'][number]) {
-  return player.history[player.history.length - 1] ?? null
+function latestHistoryEntry(player: RoomState['players'][number]): HistoryEntry | null {
+  return (player.history[player.history.length - 1] as HistoryEntry | undefined) ?? null
 }
 
-function chartTitle(metric: ResultsChartMetric): string {
+function chartTitle(metric: ResultsChartMode): string {
+  if (metric === 'revenue-profit') {
+    return 'Revenue and Profit Over Time'
+  }
+
+  if (metric === 'money') {
+    return 'Money Over Time'
+  }
+
   if (metric === 'profit') {
     return 'Profit Over Time'
   }
@@ -748,22 +777,89 @@ function chartTitle(metric: ResultsChartMetric): string {
     return 'Reputation Over Time'
   }
 
+  if (metric === 'satisfaction') {
+    return 'Satisfaction Over Time'
+  }
+
   return 'Revenue Over Time'
 }
 
-function chartValue(event: RoomState['players'][number]['history'][number], metric: ResultsChartMetric): number {
+function chartMetricLabel(metric: ResultsChartMode): string {
+  if (metric === 'revenue-profit') {
+    return 'Revenue + Profit'
+  }
+
+  if (metric === 'money') {
+    return 'Money'
+  }
+
+  if (metric === 'satisfaction') {
+    return 'Satisfaction'
+  }
+
+  return metric === 'revenue' ? 'Revenue' : metric === 'profit' ? 'Profit' : 'Reputation'
+}
+
+function chartValue(
+  event: HistoryEntry,
+  metric: ResultsChartMetric,
+): number | null {
   if (metric === 'profit') {
     return event.profit
+  }
+
+  if (metric === 'money') {
+    return event.endingMoney ?? null
   }
 
   if (metric === 'reputation') {
     return event.reputationAfter
   }
 
+  if (metric === 'satisfaction') {
+    return Number((event.satisfaction * 100).toFixed(2))
+  }
+
   return event.revenue
 }
 
-function buildChartData(players: RoomState['players'], metric: ResultsChartMetric): Array<Record<string, number | null>> {
+function formatChartValue(metric: ResultsChartMetric, value: number): string {
+  if (metric === 'reputation') {
+    return `${Math.round(value)}/100`
+  }
+
+  if (metric === 'satisfaction') {
+    return `${Math.round(value)}%`
+  }
+
+  return formatMoney(value)
+}
+
+function buildPerformanceChartSeries(players: ChartPlayer[], mode: ResultsChartMode): ChartSeries[] {
+  if (mode === 'revenue-profit') {
+    return players.flatMap((player) => [
+      {
+        dataKey: `${player.id}-revenue`,
+        label: `${player.name} Revenue`,
+        stroke: player.faction.accentColor,
+      },
+      {
+        dataKey: `${player.id}-profit`,
+        label: `${player.name} Profit`,
+        stroke: player.faction.accentColor,
+        dash: '6 5',
+      },
+    ])
+  }
+
+  return players.map((player) => ({
+    dataKey: player.id,
+    label: player.name,
+    stroke: player.faction.accentColor,
+  }))
+}
+
+function buildPerformanceChartData(players: ChartPlayer[], mode: ResultsChartMode): ChartRow[] {
   const days = new Set<number>()
   players.forEach((player) => {
     player.history.forEach((entry) => {
@@ -774,13 +870,36 @@ function buildChartData(players: RoomState['players'], metric: ResultsChartMetri
   return [...days]
     .sort((left, right) => left - right)
     .map((day) => {
-      const row: Record<string, number | null> = { day }
+      const row: ChartRow = { day }
       players.forEach((player) => {
         const entry = player.history.find((historyEntry) => historyEntry.day === day)
-        row[player.id] = entry === undefined ? null : chartValue(entry, metric)
+        if (entry === undefined) {
+          return
+        }
+
+        if (mode === 'revenue-profit') {
+          row[`${player.id}-revenue`] = chartValue(entry, 'revenue')
+          row[`${player.id}-profit`] = chartValue(entry, 'profit')
+          return
+        }
+
+        row[player.id] = chartValue(entry, mode)
       })
       return row
     })
+}
+
+function buildRecipeChartData(player: ChartPlayer): ChartRow[] {
+  return player.history.map((entry) => ({
+    day: entry.day,
+    lemons: entry.recipeSnapshot?.lemons ?? null,
+    sugar: entry.recipeSnapshot?.sugar ?? null,
+    ice: entry.recipeSnapshot?.ice ?? null,
+  }))
+}
+
+function recipeChartHasData(player: ChartPlayer | null): boolean {
+  return player !== null && player.history.some((entry) => entry.recipeSnapshot !== undefined)
 }
 
 function buildPlan(currentPlayer: ReturnType<typeof findCurrentPlayer>): DailyPlan {
@@ -1477,9 +1596,34 @@ function ResultsScreen({
   const hasRequestedNextDay =
     currentPlayerId !== null && room.requestedNextDayPlayerIds.includes(currentPlayerId)
   const isSingleplayerRoom = room.targetPlayerCount === 1
-  const [selectedMetric, setSelectedMetric] = useState<ResultsChartMetric>('revenue')
-  const chartData = buildChartData(room.players, selectedMetric)
-  const hasHistory = room.players.some((player) => player.history.length > 0)
+  const chartPlayers = room.players as ChartPlayer[]
+  const [selectedMetric, setSelectedMetric] = useState<ResultsChartMode>('revenue')
+  const [selectedRecipePlayerId, setSelectedRecipePlayerId] = useState<string | null>(
+    () => currentPlayerId ?? chartPlayers[0]?.id ?? null,
+  )
+  const selectedRecipePlayer =
+    chartPlayers.find((player) => player.id === selectedRecipePlayerId) ?? chartPlayers[0] ?? null
+  const performanceSeries = buildPerformanceChartSeries(chartPlayers, selectedMetric)
+  const performanceChartData = buildPerformanceChartData(chartPlayers, selectedMetric)
+  const recipeChartData = selectedRecipePlayer === null ? [] : buildRecipeChartData(selectedRecipePlayer)
+  const hasHistory = chartPlayers.some((player) => player.history.length > 0)
+  const hasAnyRecipeHistory = chartPlayers.some((player) => recipeChartHasData(player))
+  const hasRecipeHistory = recipeChartHasData(selectedRecipePlayer)
+
+  useEffect(() => {
+    if (chartPlayers.length === 0) {
+      setSelectedRecipePlayerId(null)
+      return
+    }
+
+    setSelectedRecipePlayerId((currentValue) => {
+      if (currentValue !== null && chartPlayers.some((player) => player.id === currentValue)) {
+        return currentValue
+      }
+
+      return currentPlayerId ?? chartPlayers[0]!.id
+    })
+  }, [chartPlayers, currentPlayerId])
 
   return (
     <section className="app-stage">
@@ -1498,6 +1642,7 @@ function ResultsScreen({
               <MetricCard label="Cups Sold" value={`${player.dailyResults?.cupsSold ?? 0}`} />
               <MetricCard label="Revenue" value={formatMoney(player.dailyResults?.revenue ?? 0)} />
               <MetricCard label="Profit" value={formatMoney(latestHistoryEntry(player)?.profit ?? 0)} />
+              <MetricCard label="End Money" value={formatMoney(latestHistoryEntry(player)?.endingMoney ?? player.money)} />
               <MetricCard label="End Rep" value={`${latestHistoryEntry(player)?.reputationAfter ?? player.reputation}/100`} />
               <MetricCard label="Satisfaction" value={`${Math.round((player.dailyResults?.satisfaction ?? 0) * 100)}%`} />
               <MetricCard label="Rep Change" value={formatSignedNumber(player.dailyResults?.reputationDelta ?? 0)} />
@@ -1517,7 +1662,7 @@ function ResultsScreen({
         <div className="results-chart-header">
           <h2>{chartTitle(selectedMetric)}</h2>
           <div aria-label="Results chart filters" className="results-filter-row" role="group">
-            {(['revenue', 'profit', 'reputation'] as const).map((metric) => (
+            {(['revenue', 'profit', 'revenue-profit', 'money', 'reputation', 'satisfaction'] as const).map((metric) => (
               <button
                 aria-pressed={selectedMetric === metric}
                 className={selectedMetric === metric ? 'filter-chip filter-chip-active' : 'filter-chip'}
@@ -1525,49 +1670,147 @@ function ResultsScreen({
                 onClick={() => setSelectedMetric(metric)}
                 type="button"
               >
-                {metric === 'revenue' ? 'Revenue' : metric === 'profit' ? 'Profit' : 'Reputation'}
+                {chartMetricLabel(metric)}
               </button>
             ))}
           </div>
         </div>
         {hasHistory ? (
-          <div className="results-chart-shell">
-            <ResponsiveContainer height="100%" width="100%">
-              <LineChart data={chartData}>
-                <CartesianGrid strokeDasharray="3 3" opacity={0.25} />
-                <XAxis allowDecimals={false} dataKey="day" />
-                <YAxis allowDecimals={selectedMetric !== 'reputation'} />
-                <Tooltip
-                  formatter={(value) => {
-                    const numericValue = typeof value === 'number' ? value : Number(value)
+          <div className="results-chart-stack">
+            <div className="summary-chip-row chart-legend-row" aria-label="Performance legend">
+              {performanceSeries.map((series) => (
+                <span className="summary-chip" key={series.dataKey}>
+                  {series.label}
+                </span>
+              ))}
+            </div>
+            <div className="results-chart-shell results-chart-shell-performance">
+              <ResponsiveContainer height="100%" width="100%">
+                <LineChart data={performanceChartData} margin={{ top: 8, right: 12, bottom: 4, left: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" opacity={0.25} />
+                  <XAxis allowDecimals={false} dataKey="day" />
+                  <YAxis
+                    allowDecimals={selectedMetric !== 'reputation' && selectedMetric !== 'satisfaction'}
+                    tickFormatter={(value) => formatChartValue(selectedMetric === 'revenue-profit' ? 'revenue' : selectedMetric, Number(value))}
+                  />
+                  <Tooltip
+                    formatter={(value) => {
+                      const numericValue = typeof value === 'number' ? value : Number(value)
 
-                    if (value === null || value === undefined || Number.isNaN(numericValue)) {
-                      return 'No data'
-                    }
+                      if (value === null || value === undefined || Number.isNaN(numericValue)) {
+                        return 'No data'
+                      }
 
-                    return selectedMetric === 'reputation'
-                      ? `${Math.round(numericValue)}/100`
-                      : formatMoney(numericValue)
-                  }}
-                  labelFormatter={(day) => `Day ${day}`}
-                />
-                {room.players.map((player) => (
+                      return formatChartValue(selectedMetric === 'revenue-profit' ? 'revenue' : selectedMetric, numericValue)
+                    }}
+                    labelFormatter={(day) => `Day ${day}`}
+                  />
+                  {performanceSeries.map((series) => (
+                    <Line
+                      connectNulls
+                      dataKey={series.dataKey}
+                      dot={false}
+                      key={series.dataKey}
+                      name={series.label}
+                      stroke={series.stroke}
+                      strokeDasharray={series.dash}
+                      strokeWidth={series.dash === undefined ? 3.25 : 2.75}
+                      type="monotone"
+                    />
+                  ))}
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        ) : (
+          <p className="chart-empty-state muted">Play another day to start building a trend line for this stand.</p>
+        )}
+      </section>
+
+      <section className="panel">
+        <div className="results-chart-header">
+          <div>
+            <p className="eyebrow">Recipe History</p>
+            <h2>{selectedRecipePlayer === null ? 'No recipe history yet' : `Recipe over time: ${selectedRecipePlayer.name}`}</h2>
+          </div>
+          {room.targetPlayerCount > 1 ? (
+            <div aria-label="Recipe history player selector" className="results-filter-row" role="group">
+              {chartPlayers.map((player) => (
+                <button
+                  aria-pressed={player.id === selectedRecipePlayerId}
+                  className={player.id === selectedRecipePlayerId ? 'filter-chip filter-chip-active' : 'filter-chip'}
+                  key={player.id}
+                  onClick={() => setSelectedRecipePlayerId(player.id)}
+                  type="button"
+                >
+                  {player.name}
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </div>
+        {hasRecipeHistory && selectedRecipePlayer !== null ? (
+          <div className="results-chart-stack">
+            <div className="summary-chip-row chart-legend-row" aria-label="Recipe legend">
+              <span className="summary-chip">Lemons</span>
+              <span className="summary-chip">Sugar</span>
+              <span className="summary-chip">Ice</span>
+            </div>
+            <div className="results-chart-shell results-chart-shell-recipe">
+              <ResponsiveContainer height="100%" width="100%">
+                <LineChart data={recipeChartData} margin={{ top: 8, right: 12, bottom: 4, left: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" opacity={0.25} />
+                  <XAxis allowDecimals={false} dataKey="day" />
+                  <YAxis allowDecimals tickFormatter={(value) => `${value}`} />
+                  <Tooltip
+                    formatter={(value, name) => {
+                      const numericValue = typeof value === 'number' ? value : Number(value)
+
+                      if (value === null || value === undefined || Number.isNaN(numericValue)) {
+                        return 'No data'
+                      }
+
+                      return [numericValue, typeof name === 'string' ? name : '']
+                    }}
+                    labelFormatter={(day) => `Day ${day}`}
+                  />
                   <Line
                     connectNulls
-                    dataKey={player.id}
+                    dataKey="lemons"
                     dot={false}
-                    key={player.id}
-                    name={player.name}
-                    stroke={player.faction.accentColor}
+                    name="Lemons"
+                    stroke="#f3b63f"
                     strokeWidth={3}
                     type="monotone"
                   />
-                ))}
-              </LineChart>
-            </ResponsiveContainer>
+                  <Line
+                    connectNulls
+                    dataKey="sugar"
+                    dot={false}
+                    name="Sugar"
+                    stroke="#2a8da8"
+                    strokeWidth={3}
+                    type="monotone"
+                  />
+                  <Line
+                    connectNulls
+                    dataKey="ice"
+                    dot={false}
+                    name="Ice"
+                    stroke="#4b8e8d"
+                    strokeWidth={3}
+                    type="monotone"
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
           </div>
         ) : (
-          <p className="muted">Play another day to start building a trend line for this stand.</p>
+          <p className="chart-empty-state muted">
+            {hasAnyRecipeHistory
+              ? `No recipe snapshots are available for ${selectedRecipePlayer?.name ?? 'the selected player'} yet.`
+              : 'Play another day to start tracking recipe trends.'}
+          </p>
         )}
       </section>
 

@@ -798,6 +798,7 @@ function finalizePlayers(room: RoomState, satisfactionTotals: Map<string, number
     const reputationAfter = clamp(player.reputation + reputationDelta, balance.reputationMin, balance.reputationMax)
     const purchaseCost = calculatePurchaseCost(room.marketBasePrices ?? emptyInventory(), player.dailyPlan.purchases)
     const profit = roundMoney(player.dailyResults.revenue - purchaseCost)
+    const endingMoney = roundMoney(player.money)
 
     return {
       ...player,
@@ -815,9 +816,11 @@ function finalizePlayers(room: RoomState, satisfactionTotals: Map<string, number
           revenue: player.dailyResults.revenue,
           purchaseCost,
           profit,
+          endingMoney,
           reputationAfter,
           cupsSold: player.dailyResults.cupsSold,
           satisfaction,
+          recipeSnapshot: sanitizeRecipe(player.dailyPlan.recipe),
         },
       ],
     }

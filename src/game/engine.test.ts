@@ -668,8 +668,14 @@ describe('multiplayer engine', () => {
         revenue: 1.1,
         purchaseCost: 5.1,
         profit: -4,
+        endingMoney: hostResults?.money,
         reputationAfter: hostResults?.reputation,
         cupsSold: 1,
+        recipeSnapshot: {
+          lemons: 2,
+          sugar: 2,
+          ice: 2,
+        },
       }),
     ])
     expect(nextDayHost?.history).toEqual(hostResults?.history)
