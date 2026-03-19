@@ -46,6 +46,8 @@ const RECIPE_MAX = 5
 const INVENTORY_PRECISION = 1
 const SATISFACTION_APPROVAL_THRESHOLD = 0.55
 const SALE_TAG_LEAD_IN_MS = 750
+const RECIPE_FEEDBACK_HINT_UPGRADE_ID = 'recipe-feedback-hints'
+const RECIPE_FEEDBACK_HINT_UPGRADE_COST = 25
 const BASE_SIMULATION_SPEED = 1
 const MIN_DEV_SIMULATION_SPEED = 0.25
 const MAX_DEV_SIMULATION_SPEED = 2
@@ -55,6 +57,33 @@ const SHOW_DEV_CONTROLS = import.meta.env.DEV || import.meta.env.MODE === 'test'
 
 type ResultsChartMetric = 'revenue' | 'profit' | 'money' | 'reputation' | 'satisfaction'
 type ResultsChartMode = ResultsChartMetric | 'revenue-profit'
+type RecipeFeedbackHintDirection = 'more' | 'less'
+type RecipeFeedbackHintIngredient = keyof Recipe
+
+interface RecipeFeedbackHint {
+  ingredient: RecipeFeedbackHintIngredient
+  direction: RecipeFeedbackHintDirection
+}
+
+interface PlayerUpgradeState {
+  ownedUpgrades?: unknown
+  upgrades?: unknown
+  upgradeKeys?: unknown
+}
+
+interface CustomerFeedbackEvent extends CustomerEvent {
+  customerHint?: RecipeFeedbackHint
+  feedbackHint?: RecipeFeedbackHint
+  hint?: RecipeFeedbackHint
+  recipeFeedbackHint?: RecipeFeedbackHint
+}
+
+interface FeedbackChipDefinition {
+  key: string
+  label: string
+  symbol: string
+  count: number
+}
 
 type HistoryEntry = RoomState['players'][number]['history'][number] & {
   endingMoney?: number
@@ -336,7 +365,7 @@ function formatCupDelta(current: number, projected: number): string {
 }
 
 function inventoryForSimulation(
-  player: NonNullable<ReturnType<typeof findCurrentPlayer>>,
+  player: RoomState['players'][number],
   events: CustomerEvent[],
   elapsedMs: number,
 ): Inventory {
@@ -354,6 +383,16 @@ function inventoryForSimulation(
   )
 
   return subtractRecipe(openingInventory, recipe, resolvedSales)
+}
+
+function isPlayerSoldOutDuringSimulation(
+  player: RoomState['players'][number],
+  events: CustomerEvent[],
+  elapsedMs: number,
+): boolean {
+  const liveInventory = inventoryForSimulation(player, events, elapsedMs)
+  const recipe = player.dailyPlan?.recipe ?? defaultBalanceConfig.defaultRecipe
+  return calculateSellableCups(liveInventory, recipe) < 1
 }
 
 function findCurrentPlayer(room: RoomState | null, playerId: string | null) {
@@ -737,18 +776,115 @@ function buildSceneStyle(event: CustomerEvent, elapsedMs: number, room: RoomStat
   }
 }
 
-function shouldShowPurchaseReaction(event: CustomerEvent, elapsedMs: number): boolean {
-  return event.outcome === 'buy' && elapsedMs >= event.outcomeAt && elapsedMs <= event.exitAt
-}
-
 function shouldShowSaleTag(event: CustomerEvent, elapsedMs: number): boolean {
   const saleTagVisibleAt = Math.min(event.outcomeAt, event.exitAt - SALE_TAG_LEAD_IN_MS)
 
   return event.outcome === 'buy' && elapsedMs >= saleTagVisibleAt && elapsedMs <= event.exitAt
 }
-
 function purchaseReactionLabel(event: CustomerEvent): string {
   return event.satisfaction >= SATISFACTION_APPROVAL_THRESHOLD ? '👍' : '👎'
+}
+
+function hintEmojiForIngredient(ingredient: RecipeFeedbackHintIngredient): string {
+  if (ingredient === 'lemons') {
+    return '🍋'
+  }
+
+  if (ingredient === 'sugar') {
+    return '🍬'
+  }
+
+  return '🧊'
+}
+
+function hintDirectionEmoji(direction: RecipeFeedbackHintDirection): string {
+  return direction === 'more' ? '⬆️' : '⬇️'
+}
+
+function hintDirectionLabel(direction: RecipeFeedbackHintDirection): string {
+  return direction === 'more' ? 'more' : 'less'
+}
+
+function hintSymbol(hint: RecipeFeedbackHint): string {
+  return `${hintEmojiForIngredient(hint.ingredient)} ${hintDirectionEmoji(hint.direction)}`
+}
+
+function readRecipeFeedbackHint(event: CustomerEvent): RecipeFeedbackHint | null {
+  const hintedEvent = event as CustomerFeedbackEvent
+
+  return (
+    hintedEvent.recipeFeedbackHint ??
+    hintedEvent.feedbackHint ??
+    hintedEvent.customerHint ??
+    hintedEvent.hint ??
+    null
+  )
+}
+
+function isRecipeFeedbackHintUpgradeOwned(player: RoomState['players'][number] | null): boolean {
+  if (player === null) {
+    return false
+  }
+
+  const upgradeState = player as RoomState['players'][number] & PlayerUpgradeState
+  const ownedUpgrades = upgradeState.ownedUpgrades ?? upgradeState.upgrades ?? upgradeState.upgradeKeys
+
+  if (Array.isArray(ownedUpgrades)) {
+    return ownedUpgrades.includes(RECIPE_FEEDBACK_HINT_UPGRADE_ID)
+  }
+
+  if (ownedUpgrades !== null && typeof ownedUpgrades === 'object') {
+    const record = ownedUpgrades as Record<string, unknown>
+    return Boolean(
+      record[RECIPE_FEEDBACK_HINT_UPGRADE_ID] ??
+        record.recipeFeedbackHints ??
+        record['recipe-feedback-hints'],
+    )
+  }
+
+  return false
+}
+
+function customerFeedbackBadge({
+  currentPlayerId,
+  event,
+  hasHintUpgrade,
+  elapsedMs,
+}: {
+  currentPlayerId: string | null
+  event: CustomerEvent
+  hasHintUpgrade: boolean
+  elapsedMs: number
+}): { content: string; className: string; label: string } | null {
+  const eventTargetsCurrentPlayer = currentPlayerId !== null && event.targetPlayerId === currentPlayerId
+  const hint = readRecipeFeedbackHint(event)
+  const shouldShowHint =
+    event.outcome === 'skip' || (event.outcome === 'buy' && event.satisfaction < SATISFACTION_APPROVAL_THRESHOLD)
+
+  if (elapsedMs < event.outcomeAt) {
+    return null
+  }
+
+  if (hasHintUpgrade && eventTargetsCurrentPlayer && hint !== null && shouldShowHint) {
+    return {
+      content: `${hintEmojiForIngredient(hint.ingredient)} ${hintDirectionEmoji(hint.direction)}`,
+      className: 'reaction-badge reaction-badge-hint',
+      label: `recipe feedback hint: ${hint.ingredient} ${hintDirectionLabel(hint.direction)}`,
+    }
+  }
+
+  if (event.outcome === 'buy') {
+    return {
+      content: purchaseReactionLabel(event),
+      className:
+        event.satisfaction >= SATISFACTION_APPROVAL_THRESHOLD
+          ? 'reaction-badge reaction-badge-positive'
+          : 'reaction-badge reaction-badge-negative',
+      label: 'customer approval reaction',
+    }
+  }
+
+  return null
 }
 
 function customerSpriteForEvent(event: CustomerEvent): string {
@@ -763,6 +899,83 @@ function latestHistoryEntry(player: RoomState['players'][number]): HistoryEntry 
   return (player.history[player.history.length - 1] as HistoryEntry | undefined) ?? null
 }
 
+function summarizeFeedbackForPlayer({
+  room,
+  playerId,
+  includeHints,
+}: {
+  room: RoomState
+  playerId: string
+  includeHints: boolean
+}): { baseCounts: FeedbackChipDefinition[]; hintCounts: FeedbackChipDefinition[] } {
+  let thumbsUp = 0
+  let thumbsDown = 0
+  const hintCounts = new Map<string, FeedbackChipDefinition>()
+
+  for (const event of room.simulation?.customerEvents ?? []) {
+    if (event.targetPlayerId !== playerId) {
+      continue
+    }
+
+    if (event.outcome === 'buy') {
+      if (event.satisfaction >= SATISFACTION_APPROVAL_THRESHOLD) {
+        thumbsUp += 1
+      } else {
+        thumbsDown += 1
+      }
+    }
+
+    if (!includeHints || (event.outcome !== 'buy' && event.outcome !== 'skip')) {
+      continue
+    }
+
+    if (event.outcome === 'buy' && event.satisfaction >= SATISFACTION_APPROVAL_THRESHOLD) {
+      continue
+    }
+
+    const hint = readRecipeFeedbackHint(event)
+    if (hint === null) {
+      continue
+    }
+
+    const key = `${hint.ingredient}:${hint.direction}`
+    const existing = hintCounts.get(key)
+
+    if (existing === undefined) {
+      hintCounts.set(key, {
+        key,
+        label: `${hint.ingredient} ${hintDirectionLabel(hint.direction)}`,
+        symbol: hintSymbol(hint),
+        count: 1,
+      })
+      continue
+    }
+
+    hintCounts.set(key, {
+      ...existing,
+      count: existing.count + 1,
+    })
+  }
+
+  return {
+    baseCounts: [
+      {
+        key: 'thumbs-up',
+        label: 'thumbs up',
+        symbol: '👍',
+        count: thumbsUp,
+      },
+      {
+        key: 'thumbs-down',
+        label: 'thumbs down',
+        symbol: '👎',
+        count: thumbsDown,
+      },
+    ],
+    hintCounts: [...hintCounts.values()],
+  }
+}
+
 function chartTitle(metric: ResultsChartMode): string {
   if (metric === 'revenue-profit') {
     return 'Revenue and Profit Over Time'
@@ -771,7 +984,6 @@ function chartTitle(metric: ResultsChartMode): string {
   if (metric === 'money') {
     return 'Money Over Time'
   }
-
   if (metric === 'profit') {
     return 'Profit Over Time'
   }
@@ -921,6 +1133,26 @@ function buildPlan(currentPlayer: ReturnType<typeof findCurrentPlayer>): DailyPl
   }
 }
 
+function shouldSyncLocalPlan(
+  previousRoom: RoomState | null,
+  nextRoom: RoomState,
+  syncedPlayer: NonNullable<ReturnType<typeof findCurrentPlayer>>,
+): boolean {
+  if (nextRoom.phase !== 'planning') {
+    return true
+  }
+
+  if (syncedPlayer.hasSubmittedPlan) {
+    return true
+  }
+
+  if (previousRoom === null) {
+    return true
+  }
+
+  return previousRoom.day !== nextRoom.day || previousRoom.phase !== nextRoom.phase
+}
+
 function MetricCard({
   label,
   value,
@@ -952,6 +1184,125 @@ function InventoryMetrics({
         <MetricCard label="Ice" value={`${inventory.ice}`} />
       </div>
     </div>
+  )
+}
+
+function UpgradeFeedbackRow({
+  currentPlayer,
+  onPurchaseUpgrade,
+}: {
+  currentPlayer: NonNullable<ReturnType<typeof findCurrentPlayer>>
+  onPurchaseUpgrade: () => void
+}): JSX.Element {
+  const hasUpgrade = isRecipeFeedbackHintUpgradeOwned(currentPlayer)
+  const canAfford = currentPlayer.money >= RECIPE_FEEDBACK_HINT_UPGRADE_COST
+  const missingMoney = Math.max(0, RECIPE_FEEDBACK_HINT_UPGRADE_COST - currentPlayer.money)
+  const buttonDisabled = hasUpgrade || !canAfford || currentPlayer.hasSubmittedPlan
+
+  const status = hasUpgrade
+    ? 'Owned'
+    : currentPlayer.hasSubmittedPlan
+      ? 'Locked'
+      : canAfford
+        ? 'Ready'
+        : `Need ${formatMoney(missingMoney)}`
+
+  return (
+    <article className="upgrade-item">
+      <div className="upgrade-copy">
+        <p className="upgrade-name">Recipe feedback hints</p>
+        <p className="muted upgrade-description">Show one emoji hint after your buys and skips.</p>
+      </div>
+      <div className="upgrade-actions">
+        <span className="upgrade-cost">{formatMoney(RECIPE_FEEDBACK_HINT_UPGRADE_COST)}</span>
+        <button
+          className="action-button action-button-secondary"
+          disabled={buttonDisabled}
+          onClick={onPurchaseUpgrade}
+          type="button"
+        >
+          {hasUpgrade
+            ? 'Owned'
+            : currentPlayer.hasSubmittedPlan
+              ? 'Locked'
+              : 'Buy'}
+        </button>
+        <span
+          aria-label={`recipe feedback hints status: ${status.toLowerCase()}`}
+          className="upgrade-status"
+        >
+          {status}
+        </span>
+      </div>
+    </article>
+  )
+}
+
+function UpgradesPanel({
+  currentPlayer,
+  onPurchaseUpgrade,
+}: {
+  currentPlayer: NonNullable<ReturnType<typeof findCurrentPlayer>>
+  onPurchaseUpgrade: () => void
+}): JSX.Element {
+  return (
+    <section className="panel upgrade-panel">
+      <p className="eyebrow">Planning</p>
+      <h2>Upgrades</h2>
+      <div className="upgrade-list">
+        <UpgradeFeedbackRow currentPlayer={currentPlayer} onPurchaseUpgrade={onPurchaseUpgrade} />
+      </div>
+    </section>
+  )
+}
+
+function FeedbackCountPill({ chip }: { chip: FeedbackChipDefinition }): JSX.Element {
+  return (
+    <span aria-label={`${chip.label} feedback count: ${chip.count}`} className="feedback-count-pill">
+      <span className="feedback-count-symbol" aria-hidden="true">
+        {chip.symbol}
+      </span>
+      <strong>{chip.count}</strong>
+    </span>
+  )
+}
+
+function ResultsFeedbackSummary({
+  room,
+  currentPlayerId,
+}: {
+  room: RoomState
+  currentPlayerId: string | null
+}): JSX.Element {
+  return (
+    <section className="panel feedback-summary-panel">
+      <p className="eyebrow">Customer Feedback</p>
+      <div className="feedback-summary-grid">
+        {room.players.map((player) => {
+          const showHintCounts =
+            currentPlayerId === player.id && isRecipeFeedbackHintUpgradeOwned(player)
+          const summary = summarizeFeedbackForPlayer({
+            room,
+            playerId: player.id,
+            includeHints: showHintCounts,
+          })
+
+          return (
+            <article className="feedback-summary-card" key={player.id}>
+              <p className="feedback-summary-name">{player.name}</p>
+              <div className="summary-chip-row">
+                {summary.baseCounts.map((chip) => (
+                  <FeedbackCountPill chip={chip} key={chip.key} />
+                ))}
+                {summary.hintCounts.map((chip) => (
+                  <FeedbackCountPill chip={chip} key={chip.key} />
+                ))}
+              </div>
+            </article>
+          )
+        })}
+      </div>
+    </section>
   )
 }
 
@@ -1172,6 +1523,7 @@ function PlanningScreen({
   error,
   onPlanChange,
   onLockIn,
+  onPurchaseUpgrade,
 }: {
   room: RoomState
   currentPlayer: NonNullable<ReturnType<typeof findCurrentPlayer>>
@@ -1179,6 +1531,7 @@ function PlanningScreen({
   error: string | null
   onPlanChange: (next: DailyPlan) => void
   onLockIn: () => void
+  onPurchaseUpgrade: () => void
 }): JSX.Element {
   const market = room.marketBasePrices ?? emptyInventory()
   const spend = room.marketBasePrices === null ? 0 : calculatePurchaseCost(market, localPlan.purchases)
@@ -1231,6 +1584,8 @@ function PlanningScreen({
       </section>
 
       <div className="panel-grid">
+        <UpgradesPanel currentPlayer={currentPlayer} onPurchaseUpgrade={onPurchaseUpgrade} />
+
         <section className="panel">
           <p className="eyebrow">Market</p>
           <h2>Buy ingredients</h2>
@@ -1351,6 +1706,7 @@ function PlanningScreen({
               className="action-button action-button-primary"
               disabled={!canAfford || currentPlayer.hasSubmittedPlan}
               onClick={onLockIn}
+              type="button"
             >
               Lock in Plan
             </button>
@@ -1406,6 +1762,7 @@ function SimulationScreen({
   )
   const liveInventory = inventoryForSimulation(currentPlayer, simulation.customerEvents, elapsedMs)
   const visiblePlayers = room.targetPlayerCount === 1 ? room.players.slice(0, 1) : room.players
+  const hasHintUpgrade = isRecipeFeedbackHintUpgradeOwned(currentPlayer)
   const progress = simulationProgress(elapsedMs, simulation.durationMs)
   const businessClock = formatBusinessClock(progress)
   const timeOfDay = sceneTimeOfDay(progress)
@@ -1546,6 +1903,9 @@ function SimulationScreen({
               key={player.id}
             >
               <p className="stand-name">{player.name}</p>
+              {isPlayerSoldOutDuringSimulation(player, simulation.customerEvents, elapsedMs) ? (
+                <span className="sold-out-sign">Sold Out</span>
+              ) : null}
               <img className="stand-sprite" src={StandSprite} alt={`${player.name} stand`} />
               <span className="stand-score">{playerSales[index] ?? 0} sales</span>
             </div>
@@ -1553,18 +1913,24 @@ function SimulationScreen({
 
           {visibleEvents.map((event) => (
             <div className={`crowd-customer crowd-${event.outcome}`} key={event.id} style={buildSceneStyle(event, elapsedMs, room)}>
-              {shouldShowPurchaseReaction(event, elapsedMs) ? (
-                <span
-                  aria-label="customer approval reaction"
-                  className={
-                    event.satisfaction >= SATISFACTION_APPROVAL_THRESHOLD
-                      ? 'reaction-badge reaction-badge-positive'
-                      : 'reaction-badge reaction-badge-negative'
-                  }
-                >
-                  {purchaseReactionLabel(event)}
-                </span>
-              ) : null}
+              {(() => {
+                const badge = customerFeedbackBadge({
+                  currentPlayerId: currentPlayer.id,
+                  event,
+                  hasHintUpgrade,
+                  elapsedMs,
+                })
+
+                if (badge === null) {
+                  return null
+                }
+
+                return (
+                  <span aria-label={badge.label} className={badge.className}>
+                    {badge.content}
+                  </span>
+                )
+              })()}
               <img
                 className="customer-sprite"
                 src={customerSpriteForEvent(event)}
@@ -1659,6 +2025,8 @@ function ResultsScreen({
           </section>
         ))}
       </div>
+
+      <ResultsFeedbackSummary currentPlayerId={currentPlayerId} room={room} />
 
       <section className="panel">
         <p className="eyebrow">History</p>
@@ -1888,6 +2256,7 @@ function App(): JSX.Element {
   const connectionRef = useRef<RoomConnection | null>(null)
   const pendingIdentityRef = useRef<IdentityDraft | null>(null)
   const sessionRef = useRef<StoredRoomSession | null>(null)
+  const roomRef = useRef<RoomState | null>(null)
   const analyticsPlayerIdRef = useRef<string>(readOrCreateAnalyticsPlayerId())
 
   const currentPlayer = findCurrentPlayer(room, session?.playerId ?? null)
@@ -1970,10 +2339,12 @@ function App(): JSX.Element {
           }
 
           if (message.type === 'room_state') {
+            const previousRoom = roomRef.current
+            roomRef.current = message.room
             setRoom(message.room)
             const syncedPlayer = findCurrentPlayer(message.room, sessionRef.current?.playerId ?? null)
 
-            if (syncedPlayer !== null) {
+            if (syncedPlayer !== null && shouldSyncLocalPlan(previousRoom, message.room, syncedPlayer)) {
               setLocalPlan(buildPlan(syncedPlayer))
             }
             setError(null)
@@ -1990,6 +2361,7 @@ function App(): JSX.Element {
 
           if (message.type === 'simulation_started') {
             const simulationMessage = message as SimulationStartedMessage
+            roomRef.current = simulationMessage.room
             setRoom(simulationMessage.room)
             const syncedPlayer = findCurrentPlayer(simulationMessage.room, sessionRef.current?.playerId ?? null)
 
@@ -2133,6 +2505,19 @@ function App(): JSX.Element {
     })
   }
 
+  function purchaseRecipeFeedbackHintsUpgrade(): void {
+    if (room === null || session === null) {
+      return
+    }
+
+    connectionRef.current?.send({
+      type: 'purchase_upgrade',
+      roomId: room.roomId,
+      playerId: session.playerId,
+      upgradeId: RECIPE_FEEDBACK_HINT_UPGRADE_ID,
+    } as unknown as ClientMessage)
+  }
+
   function requestNextDay(): void {
     if (room === null || session === null) {
       return
@@ -2187,6 +2572,7 @@ function App(): JSX.Element {
           error={error}
           onPlanChange={setLocalPlan}
           onLockIn={lockInPlan}
+          onPurchaseUpgrade={purchaseRecipeFeedbackHintsUpgrade}
         />
       ) : null}
       {room?.phase === 'simulating' && currentPlayer !== null ? (

@@ -10,6 +10,7 @@ import type {
   MarketBasePrices,
   PlayerState,
   RoomState,
+  RunUpgradeId,
   Weather,
 } from './contracts'
 import { RoomManager, type RoomGameHooks } from './room-manager'
@@ -72,6 +73,13 @@ function createHooks(): RoomGameHooks {
         ],
         rngSeed: day,
       }
+    },
+    getUpgradeCost(upgradeId: RunUpgradeId): number {
+      if (upgradeId !== 'recipe-feedback-hints') {
+        throw new Error('Unknown upgrade.')
+      }
+
+      return 25
     },
     startSimulation(room: RoomState, simulationStartAt: number): { room: RoomState; telemetry: SimulationTelemetry } {
       return {
@@ -166,14 +174,36 @@ function createHooks(): RoomGameHooks {
         })),
       }
     },
-    createPlayerDefaults(): Pick<PlayerState, 'money' | 'inventory' | 'reputation'> {
+    createPlayerDefaults(): Pick<PlayerState, 'money' | 'inventory' | 'reputation' | 'ownedUpgrades'> {
       return {
         money: 20,
         inventory: emptyInventory(),
         reputation: 50,
+        ownedUpgrades: {
+          recipeFeedbackHints: false,
+        },
       }
     },
   }
+}
+
+function createRichManager(now = 10_000): RoomManager {
+  return new RoomManager(
+    {
+      ...createHooks(),
+      createPlayerDefaults() {
+        return {
+          money: 30,
+          inventory: emptyInventory(),
+          reputation: 50,
+          ownedUpgrades: {
+            recipeFeedbackHints: false,
+          },
+        }
+      },
+    },
+    () => now,
+  )
 }
 
 function createManager(now = 10_000): RoomManager {
@@ -251,6 +281,28 @@ describe('RoomManager', () => {
     expect(room.phase).toBe('planning')
     expect(room.players).toHaveLength(2)
     expect(room.players[1]?.id).toBe('room01-player-2')
+  })
+
+  it('purchases the recipe feedback hint upgrade during planning and deducts the cost', () => {
+    const manager = createRichManager()
+    createMultiplayerRoom(manager)
+    manager.joinRoom({
+      roomId: 'ROOM01',
+      name: 'Guest',
+      faction: FACTION_BETA,
+      analyticsPlayerId: 'analytics-guest',
+    })
+
+    const room = manager.purchaseUpgrade({
+      roomId: 'ROOM01',
+      playerId: 'host-1',
+      upgradeId: 'recipe-feedback-hints',
+    })
+
+    const host = room.players.find((player) => player.id === 'host-1')
+
+    expect(host?.money).toBe(5)
+    expect(host?.ownedUpgrades?.recipeFeedbackHints).toBe(true)
   })
 
   it('starts simulation automatically once both players submit plans', () => {

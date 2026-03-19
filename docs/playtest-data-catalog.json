@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-03-18",
+  "updatedAt": "2026-03-19",
   "purpose": "Canonical catalog of raw playtest telemetry logged for solo and multiplayer balancing and post-run analysis.",
   "reviewPolicy": {
     "requiredForFeatureTypes": [
@@ -63,6 +63,13 @@
           "source": "room configuration at create_room",
           "implemented": true,
           "rationale": "Captures whether a run was configured for the shorter or longer ending so pacing and final-economy outcomes can be compared cleanly."
+        },
+        {
+          "name": "customerTastePreferenceWeight",
+          "type": "number",
+          "source": "shared balance config at room creation",
+          "implemented": true,
+          "rationale": "Captures the exact global taste-weight multiplier used when converting persistent taste offsets into daily customer preference."
         },
         {
           "name": "createdAt",
@@ -150,6 +157,13 @@
           "rationale": "Shows the stock available before the new shopping list."
         },
         {
+          "name": "recipeFeedbackHintsOwnedBeforePlanning",
+          "type": "boolean",
+          "source": "pre-submit player upgrade snapshot",
+          "implemented": true,
+          "rationale": "Shows whether the player had already unlocked the recipe hint upgrade when the day's plan was submitted."
+        },
+        {
           "name": "moneyBeforePlanning",
           "type": "number",
           "source": "pre-submit player snapshot",
@@ -190,6 +204,13 @@
           "source": "post-simulation player state",
           "implemented": true,
           "rationale": "Shows leftover stock after the day resolves."
+        },
+        {
+          "name": "recipeFeedbackHintsOwnedAfterResults",
+          "type": "boolean",
+          "source": "post-simulation player upgrade snapshot",
+          "implemented": true,
+          "rationale": "Lets balancing review compare run outcomes for players who ended the day with the hint upgrade unlocked."
         },
         {
           "name": "moneyAfterResults",
@@ -289,7 +310,14 @@
           "type": "enum",
           "source": "telemetry reason mapping",
           "implemented": true,
-          "rationale": "Stores purchased, all_prices_above_willingness, or selected_stand_sold_out."
+          "rationale": "Stores purchased, purchased_after_sold_out_reroute, all_prices_above_willingness, selected_stand_sold_out, or reroute_exhausted_after_sold_out."
+        },
+        {
+          "name": "rerouteCount",
+          "type": "integer",
+          "source": "sold-out reroute loop",
+          "implemented": true,
+          "rationale": "Counts how many sold-out selections were exhausted before the customer reached the final outcome."
         },
         {
           "name": "salePrice",
@@ -319,6 +347,13 @@
           "source": "simulation event",
           "implemented": true,
           "rationale": "Associates each offer row with one customer event."
+        },
+        {
+          "name": "selectionRound",
+          "type": "integer",
+          "source": "reroute winner-selection loop",
+          "implemented": true,
+          "rationale": "Distinguishes the initial stand selection from later reroute rounds for the same customer event."
         },
         {
           "name": "playerId",
@@ -381,7 +416,7 @@
           "type": "enum",
           "source": "telemetry classification",
           "implemented": true,
-          "rationale": "Stores selected, not_selected, price_rejected, or selected_but_sold_out."
+          "rationale": "Stores selected, not_selected, price_rejected, or selected_but_sold_out for each selection round."
         }
       ]
     }

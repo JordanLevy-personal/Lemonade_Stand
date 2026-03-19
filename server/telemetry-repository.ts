@@ -24,6 +24,7 @@ export interface GameTelemetryRecord {
   gameMode: GameMode
   playerCount: number
   runLengthDays: RunLengthDays
+  customerTastePreferenceWeight: number
 }
 
 export interface PlayerDayPlanTelemetryRecord {
@@ -39,6 +40,7 @@ export interface PlayerDayPlanTelemetryRecord {
   moneyBeforePlanning: number
   reputationBeforePlanning: number
   inventoryBeforePlanning: Inventory
+  recipeFeedbackHintsOwnedBeforePlanning: boolean
   purchases: Inventory
   recipe: Recipe
   price: number
@@ -52,6 +54,7 @@ export interface PlayerDayOutcomeTelemetryRecord {
   moneyAfterResults: number
   reputationAfterResults: number
   inventoryAfterResults: Inventory
+  recipeFeedbackHintsOwnedAfterResults: boolean
   cupsSold: number
   revenue: number
   satisfaction: number
@@ -77,6 +80,7 @@ export interface CustomerEventTelemetryRecord {
   salePrice: number
   satisfaction: number
   outcomeReason: CustomerOutcomeReason
+  rerouteCount: number
 }
 
 export interface CustomerOfferScoreTelemetryRecord {
@@ -90,6 +94,7 @@ export interface CustomerOfferScoreTelemetryRecord {
   historyBonus: number
   totalScore: number
   canFulfill: boolean
+  selectionRound: number
   offerResult: CustomerOfferResult
 }
 
@@ -128,6 +133,7 @@ export class SqliteTelemetryRepository implements TelemetryRepository {
         game_mode text not null,
         player_count integer not null,
         run_length_days integer not null,
+        customer_taste_preference_weight real not null default 0.2,
         created_at text not null,
         last_activity_at text not null
       );
@@ -149,6 +155,7 @@ export class SqliteTelemetryRepository implements TelemetryRepository {
         inventory_before_planning_lemons real not null,
         inventory_before_planning_sugar real not null,
         inventory_before_planning_ice real not null,
+        recipe_feedback_hints_owned_before_planning integer not null default 0,
         purchases_lemons real not null,
         purchases_sugar real not null,
         purchases_ice real not null,
@@ -162,6 +169,7 @@ export class SqliteTelemetryRepository implements TelemetryRepository {
         inventory_after_results_lemons real,
         inventory_after_results_sugar real,
         inventory_after_results_ice real,
+        recipe_feedback_hints_owned_after_results integer,
         cups_sold integer,
         revenue real,
         satisfaction real,
@@ -197,6 +205,7 @@ export class SqliteTelemetryRepository implements TelemetryRepository {
         sale_price real not null,
         satisfaction real not null,
         outcome_reason text not null,
+        reroute_count integer not null default 0,
         created_at text not null,
         primary key (game_id, day_number, customer_event_id)
       );
@@ -214,16 +223,30 @@ export class SqliteTelemetryRepository implements TelemetryRepository {
         history_bonus real not null,
         total_score real not null,
         can_fulfill integer not null,
+        selection_round integer not null default 1,
         offer_result text not null,
         created_at text not null,
-        primary key (game_id, day_number, customer_event_id, player_id)
+        primary key (game_id, day_number, customer_event_id, player_id, selection_round)
       );
     `)
     this.ensureColumn('games', 'game_mode', "text not null default 'multiplayer'")
     this.ensureColumn('games', 'player_count', 'integer not null default 2')
     this.ensureColumn('games', 'run_length_days', 'integer not null default 14')
+    this.ensureColumn('games', 'customer_taste_preference_weight', 'real not null default 0.2')
     this.ensureColumn('player_day_records', 'game_mode', "text not null default 'multiplayer'")
     this.ensureColumn('player_day_records', 'player_count', 'integer not null default 2')
+    this.ensureColumn(
+      'player_day_records',
+      'recipe_feedback_hints_owned_before_planning',
+      'integer not null default 0',
+    )
+    this.ensureColumn(
+      'player_day_records',
+      'recipe_feedback_hints_owned_after_results',
+      'integer',
+    )
+    this.ensureColumn('customer_events', 'reroute_count', 'integer not null default 0')
+    this.ensureColumn('customer_offer_scores', 'selection_round', 'integer not null default 1')
   }
 
   close(): void {
@@ -242,6 +265,7 @@ export class SqliteTelemetryRepository implements TelemetryRepository {
         game_mode,
         player_count,
         run_length_days,
+        customer_taste_preference_weight,
         created_at,
         last_activity_at
       ) values (
@@ -251,6 +275,7 @@ export class SqliteTelemetryRepository implements TelemetryRepository {
         :gameMode,
         :playerCount,
         :runLengthDays,
+        :customerTastePreferenceWeight,
         :createdAt,
         :lastActivityAt
       )
@@ -260,6 +285,7 @@ export class SqliteTelemetryRepository implements TelemetryRepository {
         game_mode = excluded.game_mode,
         player_count = excluded.player_count,
         run_length_days = excluded.run_length_days,
+        customer_taste_preference_weight = excluded.customer_taste_preference_weight,
         last_activity_at = excluded.last_activity_at
     `).run({
       gameId: record.gameId,
@@ -268,6 +294,7 @@ export class SqliteTelemetryRepository implements TelemetryRepository {
       gameMode: record.gameMode,
       playerCount: record.playerCount,
       runLengthDays: record.runLengthDays,
+      customerTastePreferenceWeight: record.customerTastePreferenceWeight,
       createdAt: timestamp,
       lastActivityAt: timestamp,
     })
@@ -303,6 +330,7 @@ export class SqliteTelemetryRepository implements TelemetryRepository {
         inventory_before_planning_lemons,
         inventory_before_planning_sugar,
         inventory_before_planning_ice,
+        recipe_feedback_hints_owned_before_planning,
         purchases_lemons,
         purchases_sugar,
         purchases_ice,
@@ -328,6 +356,7 @@ export class SqliteTelemetryRepository implements TelemetryRepository {
         :inventoryBeforePlanningLemons,
         :inventoryBeforePlanningSugar,
         :inventoryBeforePlanningIce,
+        :recipeFeedbackHintsOwnedBeforePlanning,
         :purchasesLemons,
         :purchasesSugar,
         :purchasesIce,
@@ -351,6 +380,7 @@ export class SqliteTelemetryRepository implements TelemetryRepository {
         inventory_before_planning_lemons = excluded.inventory_before_planning_lemons,
         inventory_before_planning_sugar = excluded.inventory_before_planning_sugar,
         inventory_before_planning_ice = excluded.inventory_before_planning_ice,
+        recipe_feedback_hints_owned_before_planning = excluded.recipe_feedback_hints_owned_before_planning,
         purchases_lemons = excluded.purchases_lemons,
         purchases_sugar = excluded.purchases_sugar,
         purchases_ice = excluded.purchases_ice,
@@ -376,6 +406,7 @@ export class SqliteTelemetryRepository implements TelemetryRepository {
       inventoryBeforePlanningLemons: record.inventoryBeforePlanning.lemons,
       inventoryBeforePlanningSugar: record.inventoryBeforePlanning.sugar,
       inventoryBeforePlanningIce: record.inventoryBeforePlanning.ice,
+      recipeFeedbackHintsOwnedBeforePlanning: record.recipeFeedbackHintsOwnedBeforePlanning ? 1 : 0,
       purchasesLemons: record.purchases.lemons,
       purchasesSugar: record.purchases.sugar,
       purchasesIce: record.purchases.ice,
@@ -396,6 +427,7 @@ export class SqliteTelemetryRepository implements TelemetryRepository {
         inventory_after_results_lemons = :inventoryAfterResultsLemons,
         inventory_after_results_sugar = :inventoryAfterResultsSugar,
         inventory_after_results_ice = :inventoryAfterResultsIce,
+        recipe_feedback_hints_owned_after_results = :recipeFeedbackHintsOwnedAfterResults,
         cups_sold = :cupsSold,
         revenue = :revenue,
         satisfaction = :satisfaction,
@@ -414,6 +446,7 @@ export class SqliteTelemetryRepository implements TelemetryRepository {
       inventoryAfterResultsLemons: record.inventoryAfterResults.lemons,
       inventoryAfterResultsSugar: record.inventoryAfterResults.sugar,
       inventoryAfterResultsIce: record.inventoryAfterResults.ice,
+      recipeFeedbackHintsOwnedAfterResults: record.recipeFeedbackHintsOwnedAfterResults ? 1 : 0,
       cupsSold: record.cupsSold,
       revenue: record.revenue,
       satisfaction: record.satisfaction,
@@ -472,6 +505,7 @@ export class SqliteTelemetryRepository implements TelemetryRepository {
         sale_price,
         satisfaction,
         outcome_reason,
+        reroute_count,
         created_at
       ) values (
         :gameId,
@@ -487,6 +521,7 @@ export class SqliteTelemetryRepository implements TelemetryRepository {
         :salePrice,
         :satisfaction,
         :outcomeReason,
+        :rerouteCount,
         :createdAt
       )
     `)
@@ -506,6 +541,7 @@ export class SqliteTelemetryRepository implements TelemetryRepository {
         salePrice: event.salePrice,
         satisfaction: event.satisfaction,
         outcomeReason: event.outcomeReason,
+        rerouteCount: event.rerouteCount,
         createdAt: this.now(),
       })
     }
@@ -526,6 +562,7 @@ export class SqliteTelemetryRepository implements TelemetryRepository {
         history_bonus,
         total_score,
         can_fulfill,
+        selection_round,
         offer_result,
         created_at
       ) values (
@@ -541,6 +578,7 @@ export class SqliteTelemetryRepository implements TelemetryRepository {
         :historyBonus,
         :totalScore,
         :canFulfill,
+        :selectionRound,
         :offerResult,
         :createdAt
       )
@@ -560,6 +598,7 @@ export class SqliteTelemetryRepository implements TelemetryRepository {
         historyBonus: score.historyBonus,
         totalScore: score.totalScore,
         canFulfill: score.canFulfill ? 1 : 0,
+        selectionRound: score.selectionRound,
         offerResult: score.offerResult,
         createdAt: this.now(),
       })
