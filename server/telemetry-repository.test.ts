@@ -81,6 +81,7 @@ describe('SqliteTelemetryRepository', () => {
         sugar: 0,
         ice: 0,
       },
+      recipeFeedbackHintsOwnedBeforePlanning: false,
       purchases: {
         lemons: 3,
         sugar: 2,
@@ -115,6 +116,7 @@ describe('SqliteTelemetryRepository', () => {
         sugar: 0,
         ice: 0,
       },
+      recipeFeedbackHintsOwnedBeforePlanning: true,
       purchases: {
         lemons: 4,
         sugar: 3,
@@ -139,6 +141,7 @@ describe('SqliteTelemetryRepository', () => {
         sugar: 1,
         ice: 0,
       },
+      recipeFeedbackHintsOwnedAfterResults: true,
       cupsSold: 2,
       revenue: 2.9,
       satisfaction: 0.82,
@@ -151,7 +154,7 @@ describe('SqliteTelemetryRepository', () => {
 
     const playerDayRows = readTable(
       databasePath,
-      'select analytics_player_id, game_mode, player_count, purchases_lemons, purchases_sugar, purchases_ice, price, cups_sold, revenue, customers_sold_out from player_day_records',
+      'select analytics_player_id, game_mode, player_count, recipe_feedback_hints_owned_before_planning, purchases_lemons, purchases_sugar, purchases_ice, price, recipe_feedback_hints_owned_after_results, cups_sold, revenue, customers_sold_out from player_day_records',
     )
     const gameRows = readTable(
       databasePath,
@@ -172,10 +175,12 @@ describe('SqliteTelemetryRepository', () => {
         analytics_player_id: 'analytics-host',
         game_mode: 'singleplayer',
         player_count: 1,
+        recipe_feedback_hints_owned_before_planning: 1,
         purchases_lemons: 4,
         purchases_sugar: 3,
         purchases_ice: 2,
         price: 1.45,
+        recipe_feedback_hints_owned_after_results: 1,
         cups_sold: 2,
         revenue: 2.9,
         customers_sold_out: 1,

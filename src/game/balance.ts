@@ -9,6 +9,7 @@ export const defaultBalanceConfig: BalanceConfig = {
     ice: 2,
   },
   defaultPrice: 1.5,
+  recipeFeedbackHintUpgradeCost: 25,
   maxPlayers: 2,
   reputationMin: 0,
   reputationMax: 100,

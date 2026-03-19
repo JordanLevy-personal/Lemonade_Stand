@@ -6,6 +6,7 @@ import type {
   PlayerState,
   RoomPhase,
   RoomState,
+  RunUpgradeId,
   Weather,
 } from './contracts'
 import type { SimulationTelemetry } from '../src/game/types'
@@ -17,6 +18,7 @@ export interface RoomGameHooks {
     customerRoster: NonNullable<RoomState['customerRoster']>
     rngSeed: number
   }
+  getUpgradeCost: (upgradeId: RunUpgradeId) => number
   startSimulation: (
     room: RoomState,
     simulationStartAt: number,
@@ -25,7 +27,7 @@ export interface RoomGameHooks {
     telemetry: SimulationTelemetry
   }
   startNextDay: (room: RoomState) => RoomState
-  createPlayerDefaults: () => Pick<PlayerState, 'money' | 'inventory' | 'reputation'>
+  createPlayerDefaults: () => Pick<PlayerState, 'money' | 'inventory' | 'reputation' | 'ownedUpgrades'>
 }
 
 interface CreateRoomInput {
@@ -55,6 +57,12 @@ interface SubmitPlanInput {
 interface RequestNextDayInput {
   roomId: string
   playerId: string
+}
+
+interface PurchaseUpgradeInput {
+  roomId: string
+  playerId: string
+  upgradeId: RunUpgradeId
 }
 
 interface DisconnectInput {
@@ -321,6 +329,53 @@ export class RoomManager {
     })
     this.rooms.set(nextDayRoom.roomId, nextDayRoom)
     return nextDayRoom
+  }
+
+  purchaseUpgrade(input: PurchaseUpgradeInput): RoomState {
+    const room = this.requireRoom(input.roomId)
+
+    if (activePhase(room) !== 'planning') {
+      throw new Error('Upgrades can only be purchased during planning.')
+    }
+
+    const player = room.players.find((candidate) => candidate.id === input.playerId)
+
+    if (player === undefined) {
+      throw new Error('The selected player could not be found.')
+    }
+
+    if (input.upgradeId !== 'recipe-feedback-hints') {
+      throw new Error('Unknown upgrade.')
+    }
+
+    const ownsUpgrade = player.ownedUpgrades?.recipeFeedbackHints ?? false
+    if (ownsUpgrade) {
+      throw new Error('That upgrade is already owned.')
+    }
+
+    const cost = this.hooks.getUpgradeCost(input.upgradeId)
+    if (player.money < cost) {
+      throw new Error('That player cannot afford the upgrade.')
+    }
+
+    const updatedRoom: RoomState = {
+      ...room,
+      players: room.players.map((candidate) =>
+        candidate.id === input.playerId
+          ? {
+              ...candidate,
+              money: candidate.money - cost,
+              ownedUpgrades: {
+                ...(candidate.ownedUpgrades ?? { recipeFeedbackHints: false }),
+                recipeFeedbackHints: true,
+              },
+            }
+          : candidate,
+      ),
+    }
+
+    this.rooms.set(updatedRoom.roomId, updatedRoom)
+    return updatedRoom
   }
 
   completeSimulation(roomId: string): RoomState {

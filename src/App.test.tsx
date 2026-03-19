@@ -35,6 +35,24 @@ const MARKET_FACTION: FactionDefinition = {
   accentColor: '#4b8e8d',
 }
 
+type RecipeFeedbackHint = {
+  ingredient: 'lemons' | 'sugar' | 'ice'
+  direction: 'more' | 'less'
+}
+
+type TestPlayerState = RoomState['players'][number] & {
+  ownedUpgrades?: string[] | Record<string, boolean>
+  upgrades?: string[] | Record<string, boolean>
+  upgradeKeys?: string[] | Record<string, boolean>
+}
+
+type TestSimulationEvent = NonNullable<NonNullable<RoomState['simulation']>['customerEvents']>[number] & {
+  customerHint?: RecipeFeedbackHint
+  feedbackHint?: RecipeFeedbackHint
+  hint?: RecipeFeedbackHint
+  recipeFeedbackHint?: RecipeFeedbackHint
+}
+
 function createRoom(overrides: Partial<RoomState> = {}): RoomState {
   return {
     roomId: 'ROOM-42',
@@ -81,7 +99,7 @@ function createRoom(overrides: Partial<RoomState> = {}): RoomState {
         },
         dailyResults: null,
         history: [],
-      },
+      } as TestPlayerState,
       {
         id: 'player-guest',
         name: 'Blair',
@@ -110,10 +128,10 @@ function createRoom(overrides: Partial<RoomState> = {}): RoomState {
         },
         dailyResults: null,
         history: [],
-      },
+      } as TestPlayerState,
     ],
     ...overrides,
-  }
+  } as RoomState
 }
 
 function createHostRoom(
@@ -168,8 +186,8 @@ function getPanelByText(pattern: RegExp): HTMLElement {
 }
 
 function createSimulationEvent(
-  overrides: Partial<NonNullable<NonNullable<RoomState['simulation']>['customerEvents']>[number]> = {},
-): NonNullable<NonNullable<RoomState['simulation']>['customerEvents']>[number] {
+  overrides: Partial<TestSimulationEvent> = {},
+): TestSimulationEvent {
   return {
     id: 'event-a',
     customerId: 'customer-a',
@@ -193,7 +211,49 @@ function createSimulationEvent(
     xJitter: 0,
     yJitter: 0,
     ...overrides,
-  }
+  } as TestSimulationEvent
+}
+
+function createOwnedHintRoom(overrides: Partial<RoomState> = {}): RoomState {
+  const room = createRoom(overrides)
+
+  return {
+    ...room,
+    players: room.players.map((player, index) =>
+      index === 0
+        ? ({
+            ...player,
+            money: 40,
+            ownedUpgrades: ['recipe-feedback-hints'],
+          } as TestPlayerState)
+        : player,
+    ),
+  } as RoomState
+}
+
+function createHintedSimulationRoom(
+  eventOverrides: Partial<TestSimulationEvent> = {},
+  roomOverrides: Partial<RoomState> = {},
+): RoomState {
+  return createOwnedHintRoom({
+    phase: 'simulating',
+    simulation: {
+      durationMs: 6000,
+      simulationStartAt: Date.parse('2026-03-16T12:00:00.000Z'),
+      customerEvents: [
+        createSimulationEvent({
+          outcomeAt: 1_500,
+          exitAt: 2_000,
+          recipeFeedbackHint: {
+            ingredient: 'lemons',
+            direction: 'more',
+          },
+          ...eventOverrides,
+        }),
+      ],
+    },
+    ...roomOverrides,
+  })
 }
 
 function emitMessage(message: unknown): void {
@@ -589,6 +649,92 @@ describe('App', () => {
     expect(screen.getByText(/\$1\.98/)).toBeInTheDocument()
   })
 
+  it('shows the hint upgrade as unaffordable until the player has enough cash', () => {
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'room_state',
+      room: createRoom(),
+    })
+
+    expect(screen.getByLabelText(/status: need \$5\.00/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /buy for \$25\.00/i })).toBeDisabled()
+  })
+
+  it('allows buying the recipe feedback hint upgrade during planning', () => {
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'room_state',
+      room: createRoom({
+        players: [
+          {
+            ...createRoom().players[0],
+            money: 40,
+          } as TestPlayerState,
+          createRoom().players[1],
+        ],
+      }),
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /buy for \$25\.00/i }))
+
+    expect(sendMock).toHaveBeenLastCalledWith({
+      type: 'purchase_upgrade',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      upgradeId: 'recipe-feedback-hints',
+    })
+  })
+
+  it('shows the hint upgrade as owned once it has been unlocked', () => {
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'room_state',
+      room: createOwnedHintRoom({
+        phase: 'planning',
+      }),
+    })
+
+    expect(screen.getByLabelText(/status: owned/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /upgrade owned/i })).toBeDisabled()
+    expect(screen.getByText(/hints stay active for the rest of the run/i)).toBeInTheDocument()
+  })
+
   it('renders the simulation scene from a shared start event', () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-03-16T12:00:02.000Z'))
@@ -801,7 +947,14 @@ describe('App', () => {
         simulation: {
           durationMs: 6000,
           simulationStartAt: Date.parse('2026-03-16T12:00:00.000Z'),
-          customerEvents: [createSimulationEvent()],
+          customerEvents: [
+            createSimulationEvent({
+              recipeFeedbackHint: {
+                ingredient: 'lemons',
+                direction: 'more',
+              },
+            }),
+          ],
         },
       }),
     })
@@ -814,6 +967,90 @@ describe('App', () => {
 
     expect(screen.getByLabelText(/customer approval reaction/i)).toBeInTheDocument()
     expect(screen.getByText('👍')).toBeInTheDocument()
+  })
+
+  it('shows ingredient-direction hints for an upgraded player during simulation', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-03-16T12:00:00.000Z'))
+
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'simulation_started',
+      simulationStartAt: Date.parse('2026-03-16T12:00:00.000Z'),
+      room: createHintedSimulationRoom(
+        {},
+        {
+          simulation: {
+            durationMs: 6000,
+            simulationStartAt: Date.parse('2026-03-16T12:00:00.000Z'),
+            customerEvents: [
+              createSimulationEvent({
+                id: 'event-a',
+                customerId: 'customer-a',
+                customerIndex: 0,
+                outcomeAt: 1_500,
+                exitAt: 2_000,
+                targetPlayerId: 'player-host',
+                outcome: 'buy',
+                salePrice: 1.5,
+                satisfaction: 0.8,
+                willingnessToPay: 2,
+                lane: 0,
+                recipeFeedbackHint: {
+                  ingredient: 'lemons',
+                  direction: 'more',
+                },
+              }),
+              createSimulationEvent({
+                id: 'event-b',
+                customerId: 'customer-b',
+                customerIndex: 1,
+                spawnAt: 400,
+                outcomeAt: 1_600,
+                exitAt: 2_200,
+                standStops: [
+                  {
+                    playerId: 'player-host',
+                    arriveAt: 900,
+                    departAt: 1_600,
+                  },
+                ],
+                targetPlayerId: 'player-host',
+                outcome: 'skip',
+                salePrice: 0,
+                satisfaction: 0,
+                willingnessToPay: 1,
+                lane: 1,
+                recipeFeedbackHint: {
+                  ingredient: 'sugar',
+                  direction: 'less',
+                },
+              }),
+            ],
+          },
+        },
+      ),
+    })
+
+    act(() => {
+      vi.advanceTimersByTime(1_700)
+    })
+
+    expect(screen.getByLabelText(/recipe feedback hint: lemons more/i)).toBeInTheDocument()
+    expect(screen.getByLabelText(/recipe feedback hint: sugar less/i)).toBeInTheDocument()
+    expect(screen.queryByLabelText(/customer approval reaction/i)).not.toBeInTheDocument()
   })
 
   it('shows a developer-only simulation speed slider and updates playback speed', () => {

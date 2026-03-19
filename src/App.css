@@ -326,6 +326,12 @@
   pointer-events: none;
 }
 
+.upgrade-panel {
+  background:
+    radial-gradient(circle at top left, rgba(42, 141, 168, 0.18), transparent 32%),
+    linear-gradient(135deg, rgba(255, 250, 236, 0.98), rgba(255, 241, 205, 0.94));
+}
+
 .forecast-grid {
   position: relative;
   z-index: 1;
@@ -453,6 +459,12 @@
 
 .reaction-badge-negative {
   color: #b6452f;
+}
+
+.reaction-badge-hint {
+  color: #8a5a00;
+  background: rgba(255, 246, 214, 0.94);
+  letter-spacing: 0.04em;
 }
 
 .sale-tag {
