@@ -106,20 +106,20 @@
 .price-row {
   display: flex;
   flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 1rem;
+  align-items: center;
+  gap: 0.75rem;
   margin-top: 0.5rem;
 }
 
 .price-row .field {
-  width: 8rem;
+  width: 10rem;
   flex-shrink: 0;
 }
 
 .price-context {
   font-size: 0.85rem;
   color: rgba(29, 74, 79, 0.72);
-  padding-bottom: 0.75rem;
+  white-space: nowrap;
 }
 
 .margin-negative {
