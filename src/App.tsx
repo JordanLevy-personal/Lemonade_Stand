@@ -54,6 +54,7 @@ const SHOW_DEV_CONTROLS = import.meta.env.DEV || import.meta.env.MODE === 'test'
 type ResultsChartMetric = 'revenue' | 'profit' | 'reputation'
 type SceneTimeOfDay = 'morning' | 'midday' | 'afternoon' | 'dusk'
 type HslColor = [number, number, number]
+type DevWeatherOverride = 'live' | Weather
 
 interface SceneVisualKeyframe {
   progress: number
@@ -64,6 +65,46 @@ interface SceneVisualKeyframe {
   sunX: number
   sunY: number
 }
+
+interface RainDropLayout {
+  left: number
+  delay: number
+  duration: number
+  length: number
+  drift: number
+  opacity: number
+}
+
+interface CloudLayout {
+  left: number
+  top: number
+  widthRem: number
+  scale: number
+  opacity: number
+}
+
+const RAIN_DROP_LAYOUT: readonly RainDropLayout[] = [
+  { left: 2, delay: 0, duration: 0.95, length: 1.9, drift: -0.15, opacity: 0.5 },
+  { left: 7, delay: 0.18, duration: 0.88, length: 1.7, drift: -0.1, opacity: 0.58 },
+  { left: 12, delay: 0.3, duration: 1, length: 2.05, drift: -0.2, opacity: 0.54 },
+  { left: 18, delay: 0.08, duration: 0.92, length: 1.85, drift: -0.14, opacity: 0.5 },
+  { left: 24, delay: 0.42, duration: 1.08, length: 2.15, drift: -0.12, opacity: 0.56 },
+  { left: 30, delay: 0.16, duration: 0.9, length: 1.95, drift: -0.16, opacity: 0.52 },
+  { left: 36, delay: 0.5, duration: 1.02, length: 2, drift: -0.22, opacity: 0.48 },
+  { left: 42, delay: 0.26, duration: 0.86, length: 1.65, drift: -0.12, opacity: 0.62 },
+  { left: 48, delay: 0.06, duration: 0.96, length: 1.9, drift: -0.18, opacity: 0.53 },
+  { left: 54, delay: 0.34, duration: 1.1, length: 2.2, drift: -0.2, opacity: 0.47 },
+  { left: 60, delay: 0.14, duration: 0.94, length: 1.82, drift: -0.11, opacity: 0.6 },
+  { left: 66, delay: 0.54, duration: 1.04, length: 2, drift: -0.17, opacity: 0.52 },
+  { left: 72, delay: 0.22, duration: 0.9, length: 1.72, drift: -0.13, opacity: 0.55 },
+  { left: 78, delay: 0.46, duration: 1.06, length: 2.1, drift: -0.24, opacity: 0.49 },
+  { left: 84, delay: 0.12, duration: 0.89, length: 1.8, drift: -0.15, opacity: 0.58 },
+  { left: 90, delay: 0.38, duration: 1.01, length: 1.96, drift: -0.19, opacity: 0.5 },
+  { left: 5, delay: 0.62, duration: 1.12, length: 2.2, drift: -0.21, opacity: 0.44 },
+  { left: 27, delay: 0.68, duration: 0.98, length: 1.78, drift: -0.14, opacity: 0.57 },
+  { left: 51, delay: 0.72, duration: 1.08, length: 2.08, drift: -0.18, opacity: 0.46 },
+  { left: 75, delay: 0.64, duration: 0.93, length: 1.76, drift: -0.12, opacity: 0.59 },
+] as const
 
 interface StoredRoomSession {
   roomId: string
@@ -464,6 +505,63 @@ function sceneTimeOfDay(progress: number): SceneTimeOfDay {
 
 function activeSimulationWeather(room: RoomState): Weather {
   return room.weather ?? 'sunny'
+}
+
+function weatherLabelFor(weather: Weather | null | undefined): string {
+  if (weather === null || weather === undefined) {
+    return 'Waiting for both players'
+  }
+
+  return defaultBalanceConfig.weatherProfiles[weather].label
+}
+
+function hashSeed(input: string): number {
+  let hash = 2166136261
+
+  for (const character of input) {
+    hash ^= character.charCodeAt(0)
+    hash = Math.imul(hash, 16777619)
+  }
+
+  return hash >>> 0
+}
+
+function nextSeed(seed: number): number {
+  let next = seed ^ (seed << 13)
+  next ^= next >>> 17
+  next ^= next << 5
+  return next >>> 0
+}
+
+function randomUnit(seed: number): [number, number] {
+  const next = nextSeed(seed)
+  return [next / 4294967295, next]
+}
+
+function cloudLayouts(room: RoomState, weather: Weather): CloudLayout[] {
+  const cloudCount = weather === 'cloudy' ? 7 : weather === 'raining' ? 5 : 2
+  let seed = hashSeed(`${room.roomId}:${room.day}:${weather}`)
+  const layouts: CloudLayout[] = []
+
+  for (let index = 0; index < cloudCount; index += 1) {
+    const [leftRoll, leftSeed] = randomUnit(seed)
+    const [topRoll, topSeed] = randomUnit(leftSeed)
+    const [widthRoll, widthSeed] = randomUnit(topSeed)
+    const [scaleRoll, scaleSeed] = randomUnit(widthSeed)
+    const [opacityRoll, opacitySeed] = randomUnit(scaleSeed)
+
+    layouts.push({
+      left: 3 + leftRoll * 81,
+      top: 2 + topRoll * 17,
+      widthRem: 5.6 + widthRoll * 2.6,
+      scale: 0.82 + scaleRoll * 0.26,
+      opacity: 0.32 + opacityRoll * 0.18,
+    })
+
+    seed = opacitySeed
+  }
+
+  return layouts
 }
 
 function timeOfDayLabel(timeOfDay: SceneTimeOfDay): string {
@@ -1097,13 +1195,17 @@ function SimulationScreen({
   elapsedMs,
   currentPlayer,
   simulationSpeed,
+  devWeatherOverride,
   onSimulationSpeedChange,
+  onDevWeatherOverrideChange,
 }: {
   room: RoomState
   elapsedMs: number
   currentPlayer: NonNullable<ReturnType<typeof findCurrentPlayer>>
   simulationSpeed: number
+  devWeatherOverride: DevWeatherOverride
   onSimulationSpeedChange: (value: number) => void
+  onDevWeatherOverrideChange: (value: DevWeatherOverride) => void
 }): JSX.Element {
   const simulation = room.simulation
   if (simulation === null) {
@@ -1126,9 +1228,11 @@ function SimulationScreen({
   const progress = simulationProgress(elapsedMs, simulation.durationMs)
   const businessClock = formatBusinessClock(progress)
   const timeOfDay = sceneTimeOfDay(progress)
-  const weather = activeSimulationWeather(room)
-  const weatherName = weatherLabel(room)
+  const actualWeather = activeSimulationWeather(room)
+  const weather = devWeatherOverride === 'live' ? actualWeather : devWeatherOverride
+  const weatherName = weatherLabelFor(weather)
   const sceneStyle = sceneVisualStyle(progress, weather)
+  const sceneClouds = cloudLayouts(room, weather)
 
   return (
     <section className="app-stage">
@@ -1167,8 +1271,25 @@ function SimulationScreen({
             maxLabel={`${MAX_DEV_SIMULATION_SPEED.toFixed(2)}x`}
             onChange={onSimulationSpeedChange}
           />
+          <label className="field">
+            <span className="field-label">Weather Override</span>
+            <select
+              aria-label="Weather Override"
+              className="field-input"
+              onChange={(event) => onDevWeatherOverrideChange(event.target.value as DevWeatherOverride)}
+              value={devWeatherOverride}
+            >
+              <option value="live">Live weather ({weatherLabelFor(actualWeather)})</option>
+              <option value="sunny">Sunny</option>
+              <option value="hot">Hot</option>
+              <option value="cloudy">Cloudy</option>
+              <option value="raining">Raining</option>
+            </select>
+          </label>
           <p className="muted">
-            The slower production baseline is now treated as 1x. Lower this in developer mode for slow motion or raise it to fast-forward local testing.
+            {devWeatherOverride === 'live'
+              ? 'The slower production baseline is now treated as 1x. Lower this in developer mode for slow motion or raise it to fast-forward local testing.'
+              : `Weather visuals are currently overridden to ${weatherName} for local testing. The room still reports ${weatherLabelFor(actualWeather)}.`}
           </p>
         </section>
       ) : null}
@@ -1193,10 +1314,43 @@ function SimulationScreen({
           style={sceneStyle}
         >
           <div className="crowd-sun" aria-hidden="true" />
-          <div className="crowd-cloud crowd-cloud-left" aria-hidden="true" />
-          <div className="crowd-cloud crowd-cloud-right" aria-hidden="true" />
+          {sceneClouds.map((cloud, index) => (
+            <div
+              aria-hidden="true"
+              className="crowd-cloud"
+              key={`cloud-${index}`}
+              style={
+                {
+                  '--cloud-left': `${cloud.left}%`,
+                  '--cloud-top': `${cloud.top}%`,
+                  '--cloud-width': `${cloud.widthRem}rem`,
+                  '--cloud-scale': `${cloud.scale}`,
+                  '--cloud-opacity': `${cloud.opacity}`,
+                } as CSSProperties
+              }
+            />
+          ))}
           <div className="crowd-haze" aria-hidden="true" />
-          <div className="crowd-rain" aria-hidden="true" />
+          {weather === 'raining' ? (
+            <div className="crowd-rain" aria-hidden="true">
+              {RAIN_DROP_LAYOUT.map((drop, index) => (
+                <span
+                  className="crowd-rain-drop"
+                  key={`rain-drop-${index}`}
+                  style={
+                    {
+                      '--rain-left': `${drop.left}%`,
+                      '--rain-delay': `${drop.delay}s`,
+                      '--rain-duration': `${drop.duration}s`,
+                      '--rain-length': `${drop.length}rem`,
+                      '--rain-drift': `${drop.drift}rem`,
+                      '--rain-opacity': `${drop.opacity}`,
+                    } as CSSProperties
+                  }
+                />
+              ))}
+            </div>
+          ) : null}
           <div className="crowd-sidewalk" aria-hidden="true" />
           <div className="crowd-road" aria-hidden="true" />
           {visiblePlayers.map((player, index) => (
@@ -1410,6 +1564,7 @@ function App(): JSX.Element {
   })
   const [simulationStartAtMs, setSimulationStartAtMs] = useState<number | null>(null)
   const [simulationSpeed, setSimulationSpeed] = useState(BASE_SIMULATION_SPEED)
+  const [devWeatherOverride, setDevWeatherOverride] = useState<DevWeatherOverride>('live')
   const [clockNowMs, setClockNowMs] = useState(() => Date.now())
   const [error, setError] = useState<string | null>(null)
   const connectionRef = useRef<RoomConnection | null>(null)
@@ -1721,7 +1876,9 @@ function App(): JSX.Element {
           elapsedMs={elapsedMs}
           currentPlayer={currentPlayer}
           simulationSpeed={simulationSpeed}
+          devWeatherOverride={devWeatherOverride}
           onSimulationSpeedChange={setSimulationSpeed}
+          onDevWeatherOverrideChange={setDevWeatherOverride}
         />
       ) : null}
       {room?.phase === 'results' ? (

@@ -465,8 +465,9 @@
 }
 
 .crowd-cloud {
-  top: 2.2rem;
-  width: 8rem;
+  top: var(--cloud-top, 9%);
+  left: var(--cloud-left, 26%);
+  width: var(--cloud-width, 8rem);
   height: 2.8rem;
   border-radius: 999px;
   background:
@@ -474,18 +475,9 @@
     radial-gradient(circle at 40% 38%, rgba(255, 255, 255, 0.96) 0 30%, transparent 31%),
     radial-gradient(circle at 68% 52%, rgba(255, 255, 255, 0.92) 0 26%, transparent 27%),
     linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(222, 235, 246, 0.76));
-  opacity: 0.38;
+  opacity: var(--cloud-opacity, 0.38);
+  transform: scale(var(--cloud-scale, 1));
   z-index: 1;
-}
-
-.crowd-cloud-left {
-  left: 26%;
-}
-
-.crowd-cloud-right {
-  right: 10%;
-  top: 4.2rem;
-  width: 7rem;
 }
 
 .crowd-haze {
@@ -499,10 +491,28 @@
 
 .crowd-rain {
   inset: 0;
-  background:
-    repeating-linear-gradient(105deg, rgba(177, 209, 236, 0) 0 12px, rgba(177, 209, 236, 0.45) 12px 14px, rgba(177, 209, 236, 0) 14px 24px);
   opacity: 0;
+  overflow: hidden;
+  pointer-events: none;
   z-index: 1;
+}
+
+.crowd-rain-drop {
+  position: absolute;
+  top: -24%;
+  left: var(--rain-left);
+  width: 0.28rem;
+  height: var(--rain-length);
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.45), rgba(105, 181, 239, 1));
+  box-shadow:
+    0 0 14px rgba(167, 210, 242, 0.6),
+    0 0 3px rgba(255, 255, 255, 0.35);
+  opacity: var(--rain-opacity);
+  transform: translateX(0) rotate(14deg);
+  animation: rainfall var(--rain-duration) linear infinite;
+  animation-delay: var(--rain-delay);
+  will-change: top, transform, opacity;
 }
 
 .crowd-sidewalk {
@@ -619,6 +629,25 @@
   color: #b4582f;
 }
 
+@keyframes rainfall {
+  0% {
+    top: -24%;
+    opacity: 0;
+    transform: translateX(0) rotate(14deg);
+  }
+
+  8% {
+    top: -10%;
+    opacity: var(--rain-opacity);
+  }
+
+  100% {
+    top: 112%;
+    opacity: 0.1;
+    transform: translateX(var(--rain-drift)) rotate(14deg);
+  }
+}
+
 .results-chart-header {
   display: flex;
   justify-content: space-between;
@@ -702,6 +731,10 @@
   .crowd-cloud-right {
     right: 8%;
     width: 5.5rem;
+  }
+
+  .crowd-cloud {
+    width: min(var(--cloud-width, 8rem), 5rem);
   }
 
   .stand-column {
