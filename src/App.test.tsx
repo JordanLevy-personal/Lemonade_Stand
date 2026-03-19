@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import App, { ROOM_SESSION_KEY } from './App'
+import App, { RESULTS_CHART_LAYOUT_KEY, ROOM_SESSION_KEY } from './App'
 import type { RoomConnection, RoomConnectionHandlers } from './client/socket'
 import type { FactionDefinition, Recipe, RoomState } from './client/protocol'
 
@@ -2235,7 +2235,7 @@ describe('App', () => {
     expect(screen.queryByRole('button', { name: /^next day$/i })).not.toBeInTheDocument()
   })
 
-  it('switches the results chart with metric filter buttons', () => {
+  it('splits the main chart, promotes the next chart, and recombines it into the filter pool', () => {
     render(<App />)
 
     fireEvent.change(screen.getByLabelText(/your name/i), {
@@ -2300,25 +2300,105 @@ describe('App', () => {
       }),
     })
 
+    const filterRow = screen.getByRole('group', { name: /results chart filters/i })
+
     expect(screen.getByRole('heading', { name: /revenue over time/i })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /revenue \+ profit/i })).toBeInTheDocument()
+    expect(within(filterRow).getByRole('button', { name: /^revenue$/i })).toHaveAttribute('aria-pressed', 'true')
 
-    fireEvent.click(screen.getByRole('button', { name: /revenue \+ profit/i }))
-    expect(screen.getByRole('heading', { name: /revenue and profit over time/i })).toBeInTheDocument()
-    expect(screen.getByText(/alex revenue/i)).toBeInTheDocument()
-    expect(screen.getByText(/alex profit/i)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /split chart/i }))
 
-    fireEvent.click(screen.getByRole('button', { name: /^money$/i }))
-    expect(screen.getByRole('heading', { name: /money over time/i })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: /profit over time/i })).toBeInTheDocument()
+    expect(within(filterRow).queryByRole('button', { name: /^revenue$/i })).not.toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole('button', { name: /^satisfaction$/i }))
-    expect(screen.getByRole('heading', { name: /satisfaction over time/i })).toBeInTheDocument()
+    const splitCharts = screen.getByLabelText(/split results charts/i)
 
-    fireEvent.click(screen.getByRole('button', { name: /^profit$/i }))
+    expect(within(splitCharts).getByRole('heading', { name: /revenue over time/i })).toBeInTheDocument()
+
+    fireEvent.click(within(splitCharts).getByRole('button', { name: /recombine/i }))
+
+    expect(screen.queryByLabelText(/split results charts/i)).not.toBeInTheDocument()
+    expect(within(filterRow).getByRole('button', { name: /^revenue$/i })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: /profit over time/i })).toBeInTheDocument()
   })
 
-  it('shows a separate recipe chart and lets multiplayer players switch the visible history', () => {
+  it('persists split charts and recipe player selection across refresh', () => {
+    const firstRender = render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'room_state',
+      room: createRoom({
+        phase: 'results',
+        players: createRoom().players.map((player, index) => ({
+          ...player,
+          dailyResults: {
+            cupsSold: 10 - index,
+            revenue: 18 - index * 4,
+            satisfaction: 0.8 - index * 0.1,
+            reputationDelta: 4 - index,
+            customersWon: 10 - index,
+            customersSkipped: 3 + index,
+            customersSoldOut: index,
+          },
+          history: [
+            createHistoryEntry({
+              day: 1,
+              revenue: 15 - index * 4,
+              profit: 10 - index * 4,
+              endingMoney: 25 + index,
+              reputationAfter: 50 + index,
+              cupsSold: 8 - index,
+              satisfaction: 0.7 - index * 0.1,
+              recipeSnapshot: {
+                lemons: 1 + index,
+                sugar: 2,
+                ice: 3 - index,
+              },
+            }),
+            createHistoryEntry({
+              day: 2,
+              revenue: 18 - index * 4,
+              profit: 12 - index * 4,
+              endingMoney: 30 + index,
+              reputationAfter: 54 + index,
+              cupsSold: 10 - index,
+              satisfaction: 0.8 - index * 0.1,
+              recipeSnapshot: {
+                lemons: 1.5 + index,
+                sugar: 2.5,
+                ice: 2 - index,
+              },
+            }),
+          ],
+        })),
+      }),
+    })
+
+    const filterRow = screen.getByRole('group', { name: /results chart filters/i })
+
+    fireEvent.click(within(filterRow).getByRole('button', { name: /^recipe$/i }))
+    expect(screen.getByRole('heading', { name: /recipe over time: alex/i })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /blair/i }))
+    expect(screen.getByRole('heading', { name: /recipe over time: blair/i })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /split chart/i }))
+    expect(within(filterRow).queryByRole('button', { name: /^recipe$/i })).not.toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: /revenue over time/i })).toBeInTheDocument()
+    expect(screen.getByLabelText(/split results charts/i)).toHaveTextContent(/recipe over time: blair/i)
+
+    firstRender.unmount()
+
     render(<App />)
 
     fireEvent.change(screen.getByLabelText(/your name/i), {
@@ -2381,16 +2461,144 @@ describe('App', () => {
       }),
     })
 
-    expect(screen.getByRole('heading', { name: /recipe over time: alex/i })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /alex/i })).toHaveAttribute('aria-pressed', 'true')
-
-    fireEvent.click(screen.getByRole('button', { name: /blair/i }))
-
-    expect(screen.getByRole('heading', { name: /recipe over time: blair/i })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /blair/i })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('heading', { name: /revenue over time/i })).toBeInTheDocument()
+    expect(screen.getByLabelText(/split results charts/i)).toHaveTextContent(/recipe over time: blair/i)
   })
 
-  it('shows an empty-state message when chart history is unavailable', () => {
+  it('keeps split charts unique and hides them from the main chart filter row', () => {
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'room_state',
+      room: createRoom({
+        phase: 'results',
+        players: createRoom().players.map((player, index) => ({
+          ...player,
+          dailyResults: {
+            cupsSold: 10 - index,
+            revenue: 18 - index * 4,
+            satisfaction: 0.8 - index * 0.1,
+            reputationDelta: 4 - index,
+            customersWon: 10 - index,
+            customersSkipped: 3 + index,
+            customersSoldOut: index,
+          },
+          history: [
+            createHistoryEntry({
+              day: 1,
+              revenue: 15 - index * 4,
+              purchaseCost: 5,
+              profit: 10 - index * 4,
+              endingMoney: 24 + index,
+              reputationAfter: 50 + index,
+              cupsSold: 8 - index,
+              satisfaction: 0.7 - index * 0.1,
+              recipeSnapshot: {
+                lemons: 1 + index * 0.5,
+                sugar: 2,
+                ice: 3 - index,
+              },
+            }),
+            createHistoryEntry({
+              day: 2,
+              revenue: 18 - index * 4,
+              purchaseCost: 6,
+              profit: 12 - index * 4,
+              endingMoney: 30 + index,
+              reputationAfter: 54 + index,
+              cupsSold: 10 - index,
+              satisfaction: 0.8 - index * 0.1,
+              recipeSnapshot: {
+                lemons: 1.5 + index * 0.5,
+                sugar: 2.5,
+                ice: 2 - index,
+              },
+            }),
+          ],
+        })),
+      }),
+    })
+
+    const filterRow = screen.getByRole('group', { name: /results chart filters/i })
+
+    fireEvent.click(screen.getByRole('button', { name: /split chart/i }))
+    fireEvent.click(screen.getByRole('button', { name: /split chart/i }))
+
+    const splitCharts = screen.getByLabelText(/split results charts/i)
+
+    expect(within(splitCharts).getAllByRole('button', { name: /recombine/i })).toHaveLength(2)
+    expect(within(filterRow).queryByRole('button', { name: /^revenue$/i })).not.toBeInTheDocument()
+    expect(within(filterRow).queryByRole('button', { name: /^profit$/i })).not.toBeInTheDocument()
+  })
+
+  it('falls back to the default chart layout when stored layout data is stale or invalid', () => {
+    window.localStorage.setItem(
+      RESULTS_CHART_LAYOUT_KEY,
+      JSON.stringify({
+        version: 1,
+        mainChartId: 'mystery-chart',
+        splitChartIds: ['ghost-chart'],
+        recipe: {
+          selectedPlayerId: 'missing-player',
+        },
+      }),
+    )
+
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'room_state',
+      room: createRoom({
+        phase: 'results',
+        players: createRoom().players.map((player, index) => ({
+          ...player,
+          dailyResults: {
+            cupsSold: 10 - index,
+            revenue: 18 - index * 4,
+            satisfaction: 0.8 - index * 0.1,
+            reputationDelta: 4 - index,
+            customersWon: 10 - index,
+            customersSkipped: 3 + index,
+            customersSoldOut: index,
+          },
+          history: [
+            createHistoryEntry({
+              day: 1,
+              revenue: 15 - index * 4,
+              profit: 10 - index * 4,
+            }),
+          ],
+        })),
+      }),
+    })
+
+    expect(screen.getByRole('heading', { name: /revenue over time/i })).toBeInTheDocument()
+    expect(screen.queryByLabelText(/split results charts/i)).not.toBeInTheDocument()
+  })
+
+  it('shows empty-state messages in both the main slot and split chart area when history is unavailable', () => {
     render(<App />)
 
     fireEvent.change(screen.getByLabelText(/your name/i), {
@@ -2424,8 +2632,20 @@ describe('App', () => {
       }),
     })
 
+    const filterRow = screen.getByRole('group', { name: /results chart filters/i })
+
     expect(screen.getByText(/play another day to start building a trend line for this stand/i)).toBeInTheDocument()
+
+    fireEvent.click(within(filterRow).getByRole('button', { name: /^recipe$/i }))
+
     expect(screen.getByText(/play another day to start tracking recipe trends/i)).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /split chart/i }))
+
+    const splitCharts = screen.getByLabelText(/split results charts/i)
+
+    expect(screen.getByText(/play another day to start building a trend line for this stand/i)).toBeInTheDocument()
+    expect(within(splitCharts).getByText(/play another day to start tracking recipe trends/i)).toBeInTheDocument()
   })
 
   it('shows a final singleplayer summary without a next-day button', () => {
