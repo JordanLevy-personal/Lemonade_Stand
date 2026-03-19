@@ -29,7 +29,9 @@ import type {
   FactionDefinition,
   GameMode,
   RoomState,
+  RunLengthDays,
   SimulationStartedMessage,
+  Weather,
 } from './client/protocol'
 import { openRoomConnection, type RoomConnection, type RoomConnectionHandlers } from './client/socket'
 
@@ -46,6 +48,8 @@ const SATISFACTION_APPROVAL_THRESHOLD = 0.55
 const BASE_SIMULATION_SPEED = 1
 const MIN_DEV_SIMULATION_SPEED = 0.25
 const MAX_DEV_SIMULATION_SPEED = 2
+const BUSINESS_DAY_START_MINUTES = 8 * 60
+const BUSINESS_DAY_END_MINUTES = 18 * 60
 const SHOW_DEV_CONTROLS = import.meta.env.DEV || import.meta.env.MODE === 'test'
 
 type ResultsChartMetric = 'revenue' | 'profit' | 'money' | 'reputation' | 'satisfaction'
@@ -70,6 +74,59 @@ interface ChartSeries {
   stroke: string
   dash?: string
 }
+type SceneTimeOfDay = 'morning' | 'midday' | 'afternoon' | 'dusk'
+type HslColor = [number, number, number]
+type DevWeatherOverride = 'live' | Weather
+
+interface SceneVisualKeyframe {
+  progress: number
+  skyTop: HslColor
+  skyBottom: HslColor
+  groundTop: HslColor
+  groundBottom: HslColor
+  sunX: number
+  sunY: number
+}
+
+interface RainDropLayout {
+  left: number
+  delay: number
+  duration: number
+  length: number
+  drift: number
+  opacity: number
+}
+
+interface CloudLayout {
+  left: number
+  top: number
+  widthRem: number
+  scale: number
+  opacity: number
+}
+
+const RAIN_DROP_LAYOUT: readonly RainDropLayout[] = [
+  { left: 2, delay: 0, duration: 0.95, length: 1.9, drift: -0.15, opacity: 0.5 },
+  { left: 7, delay: 0.18, duration: 0.88, length: 1.7, drift: -0.1, opacity: 0.58 },
+  { left: 12, delay: 0.3, duration: 1, length: 2.05, drift: -0.2, opacity: 0.54 },
+  { left: 18, delay: 0.08, duration: 0.92, length: 1.85, drift: -0.14, opacity: 0.5 },
+  { left: 24, delay: 0.42, duration: 1.08, length: 2.15, drift: -0.12, opacity: 0.56 },
+  { left: 30, delay: 0.16, duration: 0.9, length: 1.95, drift: -0.16, opacity: 0.52 },
+  { left: 36, delay: 0.5, duration: 1.02, length: 2, drift: -0.22, opacity: 0.48 },
+  { left: 42, delay: 0.26, duration: 0.86, length: 1.65, drift: -0.12, opacity: 0.62 },
+  { left: 48, delay: 0.06, duration: 0.96, length: 1.9, drift: -0.18, opacity: 0.53 },
+  { left: 54, delay: 0.34, duration: 1.1, length: 2.2, drift: -0.2, opacity: 0.47 },
+  { left: 60, delay: 0.14, duration: 0.94, length: 1.82, drift: -0.11, opacity: 0.6 },
+  { left: 66, delay: 0.54, duration: 1.04, length: 2, drift: -0.17, opacity: 0.52 },
+  { left: 72, delay: 0.22, duration: 0.9, length: 1.72, drift: -0.13, opacity: 0.55 },
+  { left: 78, delay: 0.46, duration: 1.06, length: 2.1, drift: -0.24, opacity: 0.49 },
+  { left: 84, delay: 0.12, duration: 0.89, length: 1.8, drift: -0.15, opacity: 0.58 },
+  { left: 90, delay: 0.38, duration: 1.01, length: 1.96, drift: -0.19, opacity: 0.5 },
+  { left: 5, delay: 0.62, duration: 1.12, length: 2.2, drift: -0.21, opacity: 0.44 },
+  { left: 27, delay: 0.68, duration: 0.98, length: 1.78, drift: -0.14, opacity: 0.57 },
+  { left: 51, delay: 0.72, duration: 1.08, length: 2.08, drift: -0.18, opacity: 0.46 },
+  { left: 75, delay: 0.64, duration: 0.93, length: 1.76, drift: -0.12, opacity: 0.59 },
+] as const
 
 interface StoredRoomSession {
   roomId: string
@@ -89,6 +146,7 @@ interface LobbyForm {
   name: string
   roomId: string
   factionId: string
+  runLengthDays: RunLengthDays
 }
 
 function readStoredRoomSession(): StoredRoomSession | null {
@@ -151,6 +209,44 @@ function factionDefinition(factionId: string): FactionDefinition {
 
 function formatMoney(value: number): string {
   return `$${value.toFixed(2)}`
+}
+
+function parseRunLengthDays(value: string): RunLengthDays {
+  return value === '30' ? 30 : 14
+}
+
+function winnerNames(room: RoomState): string[] {
+  if (room.finalOutcome === null) {
+    return []
+  }
+
+  return room.finalOutcome.winnerPlayerIds
+    .map((playerId) => room.players.find((player) => player.id === playerId)?.name ?? null)
+    .filter((name): name is string => name !== null)
+}
+
+function finalOutcomeCopy(room: RoomState): string {
+  if (!room.isGameComplete) {
+    return room.targetPlayerCount === 1
+      ? 'Review your stand results, then continue when you are ready.'
+      : 'Compare both stands, then request the next day when everyone is ready to keep playing.'
+  }
+
+  if (room.targetPlayerCount === 1) {
+    return `Your ${room.runLengthDays}-day run is complete. Review your final cash and reputation below.`
+  }
+
+  const winners = winnerNames(room)
+
+  if (room.finalOutcome?.decidedBy === 'draw') {
+    return `It is a draw. ${winners.join(' and ')} finished tied on money and reputation.`
+  }
+
+  if (room.finalOutcome?.decidedBy === 'reputation') {
+    return `${winners[0] ?? 'The winner'} wins on reputation after a cash tie.`
+  }
+
+  return `${winners[0] ?? 'The winner'} wins with the most money after ${room.runLengthDays} days.`
 }
 
 function numberValue(input: string): number {
@@ -313,6 +409,235 @@ function interpolate(start: number, end: number, progress: number): number {
   return start + (end - start) * clamp(progress, 0, 1)
 }
 
+function simulationProgress(elapsedMs: number, durationMs: number): number {
+  return clamp(elapsedMs / Math.max(durationMs, 1), 0, 1)
+}
+
+function interpolateStops(progress: number, stops: readonly [number, number][]): number {
+  const clampedProgress = clamp(progress, 0, 1)
+
+  for (let index = 0; index < stops.length - 1; index += 1) {
+    const [startProgress, startValue] = stops[index]!
+    const [endProgress, endValue] = stops[index + 1]!
+
+    if (clampedProgress <= endProgress) {
+      const rangeProgress =
+        endProgress === startProgress
+          ? 0
+          : (clampedProgress - startProgress) / (endProgress - startProgress)
+      return interpolate(startValue, endValue, rangeProgress)
+    }
+  }
+
+  return stops[stops.length - 1]![1]
+}
+
+function interpolateColor(progress: number, stops: readonly [number, HslColor][]): HslColor {
+  return [
+    interpolateStops(progress, stops.map(([stopProgress, color]) => [stopProgress, color[0]] as const)),
+    interpolateStops(progress, stops.map(([stopProgress, color]) => [stopProgress, color[1]] as const)),
+    interpolateStops(progress, stops.map(([stopProgress, color]) => [stopProgress, color[2]] as const)),
+  ]
+}
+
+function hslColorString([hue, saturation, lightness]: HslColor): string {
+  return `hsl(${Math.round(hue)} ${Math.round(saturation)}% ${Math.round(lightness)}%)`
+}
+
+function sceneVisualStyle(progress: number, weather: Weather): CSSProperties {
+  const keyframes: readonly SceneVisualKeyframe[] = [
+    {
+      progress: 0,
+      skyTop: [201, 96, 93],
+      skyBottom: [46, 82, 84],
+      groundTop: [88, 54, 63],
+      groundBottom: [101, 38, 55],
+      sunX: 8,
+      sunY: 14,
+    },
+    {
+      progress: 0.5,
+      skyTop: [198, 92, 87],
+      skyBottom: [74, 76, 88],
+      groundTop: [91, 56, 63],
+      groundBottom: [102, 41, 54],
+      sunX: 48,
+      sunY: 10,
+    },
+    {
+      progress: 1,
+      skyTop: [215, 38, 69],
+      skyBottom: [27, 82, 68],
+      groundTop: [95, 39, 59],
+      groundBottom: [98, 28, 44],
+      sunX: 84,
+      sunY: 18,
+    },
+  ]
+
+  const skyTop = interpolateColor(
+    progress,
+    keyframes.map((frame) => [frame.progress, frame.skyTop] as const),
+  )
+  const skyBottom = interpolateColor(
+    progress,
+    keyframes.map((frame) => [frame.progress, frame.skyBottom] as const),
+  )
+  const groundTop = interpolateColor(
+    progress,
+    keyframes.map((frame) => [frame.progress, frame.groundTop] as const),
+  )
+  const groundBottom = interpolateColor(
+    progress,
+    keyframes.map((frame) => [frame.progress, frame.groundBottom] as const),
+  )
+
+  let sunOpacity = interpolate(0.95, 0.35, progress)
+  let hazeOpacity = 0.08 + progress * 0.12
+  let cloudOpacity = 0.28 + progress * 0.12
+  let rainOpacity = 0
+  let saturation = 1
+
+  if (weather === 'hot') {
+    hazeOpacity += 0.14
+    cloudOpacity = 0.16
+    sunOpacity = 1
+  }
+
+  if (weather === 'cloudy') {
+    sunOpacity *= 0.45
+    cloudOpacity = 0.78
+    saturation = 0.9
+  }
+
+  if (weather === 'raining') {
+    sunOpacity = 0.1
+    cloudOpacity = 0.9
+    rainOpacity = 0.95
+    saturation = 0.82
+    hazeOpacity = 0.04
+  }
+
+  const style = {
+    '--scene-sky-top': hslColorString(skyTop),
+    '--scene-sky-bottom': hslColorString(skyBottom),
+    '--scene-ground-top': hslColorString(groundTop),
+    '--scene-ground-bottom': hslColorString(groundBottom),
+    '--scene-sun-x': `${interpolateStops(progress, keyframes.map((frame) => [frame.progress, frame.sunX] as const))}%`,
+    '--scene-sun-y': `${interpolateStops(progress, keyframes.map((frame) => [frame.progress, frame.sunY] as const))}%`,
+    '--scene-sun-opacity': sunOpacity.toFixed(2),
+    '--scene-cloud-opacity': cloudOpacity.toFixed(2),
+    '--scene-haze-opacity': hazeOpacity.toFixed(2),
+    '--scene-rain-opacity': rainOpacity.toFixed(2),
+    '--scene-saturation': saturation.toFixed(2),
+  } satisfies Record<string, string>
+
+  return style as CSSProperties
+}
+
+function formatBusinessClock(progress: number): string {
+  const dayMinutes = BUSINESS_DAY_END_MINUTES - BUSINESS_DAY_START_MINUTES
+  const elapsedMinutes =
+    progress >= 1 ? dayMinutes : Math.floor(dayMinutes * clamp(progress, 0, 1))
+  const totalMinutes = BUSINESS_DAY_START_MINUTES + elapsedMinutes
+  const hour24 = Math.floor(totalMinutes / 60)
+  const minutes = totalMinutes % 60
+  const suffix = hour24 >= 12 ? 'PM' : 'AM'
+  const hour12 = hour24 % 12 === 0 ? 12 : hour24 % 12
+
+  return `${hour12}:${minutes.toString().padStart(2, '0')} ${suffix}`
+}
+
+function sceneTimeOfDay(progress: number): SceneTimeOfDay {
+  if (progress < 0.25) {
+    return 'morning'
+  }
+
+  if (progress < 0.6) {
+    return 'midday'
+  }
+
+  if (progress < 0.85) {
+    return 'afternoon'
+  }
+
+  return 'dusk'
+}
+
+function activeSimulationWeather(room: RoomState): Weather {
+  return room.weather ?? 'sunny'
+}
+
+function weatherLabelFor(weather: Weather | null | undefined): string {
+  if (weather === null || weather === undefined) {
+    return 'Waiting for both players'
+  }
+
+  return defaultBalanceConfig.weatherProfiles[weather].label
+}
+
+function hashSeed(input: string): number {
+  let hash = 2166136261
+
+  for (const character of input) {
+    hash ^= character.charCodeAt(0)
+    hash = Math.imul(hash, 16777619)
+  }
+
+  return hash >>> 0
+}
+
+function nextSeed(seed: number): number {
+  let next = seed ^ (seed << 13)
+  next ^= next >>> 17
+  next ^= next << 5
+  return next >>> 0
+}
+
+function randomUnit(seed: number): [number, number] {
+  const next = nextSeed(seed)
+  return [next / 4294967295, next]
+}
+
+function cloudLayouts(room: RoomState, weather: Weather): CloudLayout[] {
+  const cloudCount = weather === 'cloudy' ? 7 : weather === 'raining' ? 5 : 2
+  let seed = hashSeed(`${room.roomId}:${room.day}:${weather}`)
+  const layouts: CloudLayout[] = []
+
+  for (let index = 0; index < cloudCount; index += 1) {
+    const [leftRoll, leftSeed] = randomUnit(seed)
+    const [topRoll, topSeed] = randomUnit(leftSeed)
+    const [widthRoll, widthSeed] = randomUnit(topSeed)
+    const [scaleRoll, scaleSeed] = randomUnit(widthSeed)
+    const [opacityRoll, opacitySeed] = randomUnit(scaleSeed)
+
+    layouts.push({
+      left: 3 + leftRoll * 81,
+      top: 2 + topRoll * 17,
+      widthRem: 5.6 + widthRoll * 2.6,
+      scale: 0.82 + scaleRoll * 0.26,
+      opacity: 0.32 + opacityRoll * 0.18,
+    })
+
+    seed = opacitySeed
+  }
+
+  return layouts
+}
+
+function timeOfDayLabel(timeOfDay: SceneTimeOfDay): string {
+  switch (timeOfDay) {
+    case 'morning':
+      return 'Morning light'
+    case 'midday':
+      return 'Midday peak'
+    case 'afternoon':
+      return 'Late afternoon'
+    case 'dusk':
+      return 'Closing hour'
+  }
+}
+
 function standXPercent(room: RoomState, playerId: string): number {
   if (room.targetPlayerCount === 1) {
     return 50
@@ -415,8 +740,16 @@ function shouldShowPurchaseReaction(event: CustomerEvent, elapsedMs: number): bo
   return event.outcome === 'buy' && elapsedMs >= event.outcomeAt && elapsedMs <= event.exitAt
 }
 
+function shouldShowSaleTag(event: CustomerEvent, elapsedMs: number): boolean {
+  return event.outcome === 'buy' && elapsedMs >= event.outcomeAt && elapsedMs <= event.exitAt
+}
+
 function purchaseReactionLabel(event: CustomerEvent): string {
   return event.satisfaction >= SATISFACTION_APPROVAL_THRESHOLD ? '👍' : '👎'
+}
+
+function customerSpriteForEvent(event: CustomerEvent): string {
+  return event.customerIndex % 2 === 0 ? Customer1Sprite : Customer2Sprite
 }
 
 function formatSignedNumber(value: number): string {
@@ -750,6 +1083,17 @@ function LobbyScreen({
                 ))}
               </select>
             </label>
+            <label className="field">
+              <span className="field-label">Run Length</span>
+              <select
+                className="field-input"
+                value={form.runLengthDays}
+                onChange={(event) => onChange({ runLengthDays: parseRunLengthDays(event.target.value) })}
+              >
+                <option value={14}>14 Days</option>
+                <option value={30}>30 Days</option>
+              </select>
+            </label>
           </div>
           <div className="action-row">
             <button className="action-button action-button-primary" onClick={onHost}>
@@ -1029,13 +1373,17 @@ function SimulationScreen({
   elapsedMs,
   currentPlayer,
   simulationSpeed,
+  devWeatherOverride,
   onSimulationSpeedChange,
+  onDevWeatherOverrideChange,
 }: {
   room: RoomState
   elapsedMs: number
   currentPlayer: NonNullable<ReturnType<typeof findCurrentPlayer>>
   simulationSpeed: number
+  devWeatherOverride: DevWeatherOverride
   onSimulationSpeedChange: (value: number) => void
+  onDevWeatherOverrideChange: (value: DevWeatherOverride) => void
 }): JSX.Element {
   const simulation = room.simulation
   if (simulation === null) {
@@ -1055,6 +1403,14 @@ function SimulationScreen({
   )
   const liveInventory = inventoryForSimulation(currentPlayer, simulation.customerEvents, elapsedMs)
   const visiblePlayers = room.targetPlayerCount === 1 ? room.players.slice(0, 1) : room.players
+  const progress = simulationProgress(elapsedMs, simulation.durationMs)
+  const businessClock = formatBusinessClock(progress)
+  const timeOfDay = sceneTimeOfDay(progress)
+  const actualWeather = activeSimulationWeather(room)
+  const weather = devWeatherOverride === 'live' ? actualWeather : devWeatherOverride
+  const weatherName = weatherLabelFor(weather)
+  const sceneStyle = sceneVisualStyle(progress, weather)
+  const sceneClouds = cloudLayouts(room, weather)
 
   return (
     <section className="app-stage">
@@ -1066,12 +1422,16 @@ function SimulationScreen({
             ? 'Your customer wave is live.'
             : 'Shared timeline live. The same customer wave is playing on every connected laptop.'}
         </p>
+        <div className="summary-chip-row">
+          <span className="summary-chip">{weatherName} forecast</span>
+          <span className="summary-chip">{timeOfDayLabel(timeOfDay)}</span>
+        </div>
       </div>
 
       <div className="metric-grid">
         <MetricCard label="Resolved" value={`${resolvedEvents.length}/${simulation.customerEvents.length}`} />
-        <MetricCard label="Weather" value={weatherLabel(room)} />
-        <MetricCard label="Timeline" value={`${Math.round((elapsedMs / simulation.durationMs) * 100)}%`} />
+        <MetricCard label="Weather" value={weatherName} />
+        <MetricCard label="Time" value={businessClock} />
       </div>
 
       {SHOW_DEV_CONTROLS ? (
@@ -1089,14 +1449,87 @@ function SimulationScreen({
             maxLabel={`${MAX_DEV_SIMULATION_SPEED.toFixed(2)}x`}
             onChange={onSimulationSpeedChange}
           />
+          <label className="field">
+            <span className="field-label">Weather Override</span>
+            <select
+              aria-label="Weather Override"
+              className="field-input"
+              onChange={(event) => onDevWeatherOverrideChange(event.target.value as DevWeatherOverride)}
+              value={devWeatherOverride}
+            >
+              <option value="live">Live weather ({weatherLabelFor(actualWeather)})</option>
+              <option value="sunny">Sunny</option>
+              <option value="hot">Hot</option>
+              <option value="cloudy">Cloudy</option>
+              <option value="raining">Raining</option>
+            </select>
+          </label>
           <p className="muted">
-            The slower production baseline is now treated as 1x. Lower this in developer mode for slow motion or raise it to fast-forward local testing.
+            {devWeatherOverride === 'live'
+              ? 'The slower production baseline is now treated as 1x. Lower this in developer mode for slow motion or raise it to fast-forward local testing.'
+              : `Weather visuals are currently overridden to ${weatherName} for local testing. The room still reports ${weatherLabelFor(actualWeather)}.`}
           </p>
         </section>
       ) : null}
 
       <section className="panel crowd-panel">
-        <div className="crowd-scene">
+        <div className="crowd-scene-header">
+          <div>
+            <p className="eyebrow">Business clock</p>
+            <strong className="crowd-clock">{businessClock}</strong>
+          </div>
+          <div className="summary-chip-row">
+            <span className="summary-chip">{weatherName}</span>
+            <span className="summary-chip">{timeOfDayLabel(timeOfDay)}</span>
+          </div>
+        </div>
+        <div
+          aria-label={`Simulation scene, ${weatherName}, ${businessClock}`}
+          className="crowd-scene"
+          data-time-of-day={timeOfDay}
+          data-weather={weather}
+          role="img"
+          style={sceneStyle}
+        >
+          <div className="crowd-sun" aria-hidden="true" />
+          {sceneClouds.map((cloud, index) => (
+            <div
+              aria-hidden="true"
+              className="crowd-cloud"
+              key={`cloud-${index}`}
+              style={
+                {
+                  '--cloud-left': `${cloud.left}%`,
+                  '--cloud-top': `${cloud.top}%`,
+                  '--cloud-width': `${cloud.widthRem}rem`,
+                  '--cloud-scale': `${cloud.scale}`,
+                  '--cloud-opacity': `${cloud.opacity}`,
+                } as CSSProperties
+              }
+            />
+          ))}
+          <div className="crowd-haze" aria-hidden="true" />
+          {weather === 'raining' ? (
+            <div className="crowd-rain" aria-hidden="true">
+              {RAIN_DROP_LAYOUT.map((drop, index) => (
+                <span
+                  className="crowd-rain-drop"
+                  key={`rain-drop-${index}`}
+                  style={
+                    {
+                      '--rain-left': `${drop.left}%`,
+                      '--rain-delay': `${drop.delay}s`,
+                      '--rain-duration': `${drop.duration}s`,
+                      '--rain-length': `${drop.length}rem`,
+                      '--rain-drift': `${drop.drift}rem`,
+                      '--rain-opacity': `${drop.opacity}`,
+                    } as CSSProperties
+                  }
+                />
+              ))}
+            </div>
+          ) : null}
+          <div className="crowd-sidewalk" aria-hidden="true" />
           <div className="crowd-road" aria-hidden="true" />
           {visiblePlayers.map((player, index) => (
             <div
@@ -1131,10 +1564,10 @@ function SimulationScreen({
               ) : null}
               <img
                 className="customer-sprite"
-                src={event.id.length % 2 === 0 ? Customer1Sprite : Customer2Sprite}
+                src={customerSpriteForEvent(event)}
                 alt="Customer"
               />
-              {event.outcome === 'buy' ? <span className="sale-tag">+{formatMoney(event.salePrice)}</span> : null}
+              {shouldShowSaleTag(event, elapsedMs) ? <span className="sale-tag">+{formatMoney(event.salePrice)}</span> : null}
             </div>
           ))}
         </div>
@@ -1195,13 +1628,9 @@ function ResultsScreen({
   return (
     <section className="app-stage">
       <div className="panel hero-panel">
-        <p className="eyebrow">Results phase</p>
-        <h1>Market Results</h1>
-        <p className="muted">
-          {isSingleplayerRoom
-            ? 'Review your stand results, then continue when you are ready.'
-            : 'Compare both stands, then request the next day when everyone is ready to keep playing.'}
-        </p>
+        <p className="eyebrow">{room.isGameComplete ? 'Final results' : 'Results phase'}</p>
+        <h1>{room.isGameComplete ? 'Run Complete' : 'Market Results'}</h1>
+        <p className="muted">{finalOutcomeCopy(room)}</p>
       </div>
 
       <div className="panel-grid">
@@ -1218,6 +1647,12 @@ function ResultsScreen({
               <MetricCard label="Satisfaction" value={`${Math.round((player.dailyResults?.satisfaction ?? 0) * 100)}%`} />
               <MetricCard label="Rep Change" value={formatSignedNumber(player.dailyResults?.reputationDelta ?? 0)} />
             </div>
+            {room.isGameComplete ? (
+              <div className="metric-grid compact-grid">
+                <MetricCard label="Final Cash" value={formatMoney(player.money)} />
+                <MetricCard label="Final Reputation" value={`${player.reputation}`} />
+              </div>
+            ) : null}
           </section>
         ))}
       </div>
@@ -1379,24 +1814,34 @@ function ResultsScreen({
         )}
       </section>
 
-      <div className="panel">
-        <button
-          className="action-button action-button-primary"
-          disabled={hasRequestedNextDay}
-          onClick={onNextDay}
-        >
-          {isSingleplayerRoom ? 'Next Day' : 'Request Next Day'}
-        </button>
-        <p className="muted">
-          {hasRequestedNextDay
-            ? isSingleplayerRoom
-              ? 'Loading the next day...'
-              : 'Next day requested. Waiting on the other stand.'
-            : isSingleplayerRoom
-              ? 'Start the next day when you are ready.'
-              : 'Request the next day when you are ready to keep playing.'}
-        </p>
-      </div>
+      {room.isGameComplete ? (
+        <div className="panel">
+          <p className="muted">
+            {isSingleplayerRoom
+              ? 'This run is finished. Start a new run from the lobby when you want another market.'
+              : 'This run is finished. Create a new room from the lobby when you want another market showdown.'}
+          </p>
+        </div>
+      ) : (
+        <div className="panel">
+          <button
+            className="action-button action-button-primary"
+            disabled={hasRequestedNextDay}
+            onClick={onNextDay}
+          >
+            {isSingleplayerRoom ? 'Next Day' : 'Request Next Day'}
+          </button>
+          <p className="muted">
+            {hasRequestedNextDay
+              ? isSingleplayerRoom
+                ? 'Loading the next day...'
+                : 'Next day requested. Waiting on the other stand.'
+              : isSingleplayerRoom
+                ? 'Start the next day when you are ready.'
+                : 'Request the next day when you are ready to keep playing.'}
+          </p>
+        </div>
+      )}
     </section>
   )
 }
@@ -1423,6 +1868,7 @@ function App(): JSX.Element {
     name: reconnectSession?.name ?? searchParam('name') ?? '',
     roomId: reconnectSession?.roomId ?? searchParam('roomId') ?? '',
     factionId: reconnectSession?.factionId ?? searchParam('faction') ?? DEFAULT_HOST_FACTION,
+    runLengthDays: 14,
   })
   const [session, setSession] = useState<StoredRoomSession | null>(null)
   const [room, setRoom] = useState<RoomState | null>(null)
@@ -1433,6 +1879,7 @@ function App(): JSX.Element {
   })
   const [simulationStartAtMs, setSimulationStartAtMs] = useState<number | null>(null)
   const [simulationSpeed, setSimulationSpeed] = useState(BASE_SIMULATION_SPEED)
+  const [devWeatherOverride, setDevWeatherOverride] = useState<DevWeatherOverride>('live')
   const [clockNowMs, setClockNowMs] = useState(() => Date.now())
   const [error, setError] = useState<string | null>(null)
   const connectionRef = useRef<RoomConnection | null>(null)
@@ -1588,6 +2035,7 @@ function App(): JSX.Element {
         name: lobbyForm.name,
         gameMode,
         targetPlayerCount,
+        runLengthDays: lobbyForm.runLengthDays,
         faction: factionDefinition(lobbyForm.factionId),
         analyticsPlayerId: analyticsPlayerIdRef.current,
       },
@@ -1704,7 +2152,7 @@ function App(): JSX.Element {
         {room !== null ? (
           <div className="topbar-metrics">
             <span className="summary-chip">Room {room.roomId}</span>
-            <span className="summary-chip">Day {room.day}</span>
+            <span className="summary-chip">Day {room.day} of {room.runLengthDays}</span>
             <span className="summary-chip">{weatherLabel(room)}</span>
           </div>
         ) : null}
@@ -1744,7 +2192,9 @@ function App(): JSX.Element {
           elapsedMs={elapsedMs}
           currentPlayer={currentPlayer}
           simulationSpeed={simulationSpeed}
+          devWeatherOverride={devWeatherOverride}
           onSimulationSpeedChange={setSimulationSpeed}
+          onDevWeatherOverrideChange={setDevWeatherOverride}
         />
       ) : null}
       {room?.phase === 'results' ? (

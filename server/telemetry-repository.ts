@@ -10,7 +10,7 @@ import type {
   Inventory,
   Recipe,
 } from '../src/game/types'
-import type { GameMode, Weather } from './contracts'
+import type { GameMode, RunLengthDays, Weather } from './contracts'
 
 interface SqliteTelemetryRepositoryOptions {
   databasePath: string
@@ -23,6 +23,7 @@ export interface GameTelemetryRecord {
   rngSeed: number
   gameMode: GameMode
   playerCount: number
+  runLengthDays: RunLengthDays
 }
 
 export interface PlayerDayPlanTelemetryRecord {
@@ -126,6 +127,7 @@ export class SqliteTelemetryRepository implements TelemetryRepository {
         rng_seed integer not null,
         game_mode text not null,
         player_count integer not null,
+        run_length_days integer not null,
         created_at text not null,
         last_activity_at text not null
       );
@@ -219,6 +221,7 @@ export class SqliteTelemetryRepository implements TelemetryRepository {
     `)
     this.ensureColumn('games', 'game_mode', "text not null default 'multiplayer'")
     this.ensureColumn('games', 'player_count', 'integer not null default 2')
+    this.ensureColumn('games', 'run_length_days', 'integer not null default 14')
     this.ensureColumn('player_day_records', 'game_mode', "text not null default 'multiplayer'")
     this.ensureColumn('player_day_records', 'player_count', 'integer not null default 2')
   }
@@ -238,6 +241,7 @@ export class SqliteTelemetryRepository implements TelemetryRepository {
         rng_seed,
         game_mode,
         player_count,
+        run_length_days,
         created_at,
         last_activity_at
       ) values (
@@ -246,6 +250,7 @@ export class SqliteTelemetryRepository implements TelemetryRepository {
         :rngSeed,
         :gameMode,
         :playerCount,
+        :runLengthDays,
         :createdAt,
         :lastActivityAt
       )
@@ -254,6 +259,7 @@ export class SqliteTelemetryRepository implements TelemetryRepository {
         rng_seed = excluded.rng_seed,
         game_mode = excluded.game_mode,
         player_count = excluded.player_count,
+        run_length_days = excluded.run_length_days,
         last_activity_at = excluded.last_activity_at
     `).run({
       gameId: record.gameId,
@@ -261,6 +267,7 @@ export class SqliteTelemetryRepository implements TelemetryRepository {
       rngSeed: record.rngSeed,
       gameMode: record.gameMode,
       playerCount: record.playerCount,
+      runLengthDays: record.runLengthDays,
       createdAt: timestamp,
       lastActivityAt: timestamp,
     })

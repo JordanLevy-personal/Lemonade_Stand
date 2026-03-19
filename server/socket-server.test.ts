@@ -104,6 +104,7 @@ describe('createLanServer', () => {
         name: 'Alex',
         gameMode: 'multiplayer',
         targetPlayerCount: 2,
+        runLengthDays: 14,
         faction: {
           id: 'sun-guild',
           name: 'Sun Guild',
@@ -193,6 +194,7 @@ describe('createLanServer', () => {
         name: 'Alex',
         gameMode: 'multiplayer',
         targetPlayerCount: 2,
+        runLengthDays: 14,
         faction: {
           id: 'sun-guild',
           name: 'Sun Guild',
@@ -275,7 +277,7 @@ describe('createLanServer', () => {
 
     const games = readAll(
       databasePath,
-      'select game_id, game_mode, player_count from games',
+      'select game_id, game_mode, player_count, run_length_days from games',
     )
     const playerDays = readAll(
       databasePath,
@@ -290,6 +292,7 @@ describe('createLanServer', () => {
         game_id: hostConnected.roomId,
         game_mode: 'multiplayer',
         player_count: 2,
+        run_length_days: 14,
       },
     ])
     expect(playerDays).toHaveLength(2)

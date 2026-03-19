@@ -53,3 +53,23 @@ Original prompt: ok lets add a quick feature for computing the amount of cups th
 - Introduced a reusable `RangeSliderField`, swapped the three recipe controls to it, and styled the slider presentation to match the current planning UI.
 - Validation passed with targeted App tests, the full Vitest suite, a production build, the required `web_game_playwright_client` run, and a two-page Playwright browser sanity pass with screenshot artifact `output/web-game/recipe-sliders-planning/host-planning.png`.
 - Browser sanity showed the planning screen rendering the slider controls correctly with no host/guest console errors during the live host/join flow.
+
+## 2026-03-19 10:05:47 PDT
+
+- Started a new task workspace at `tasks/active/weather-daylight-simulation/` on `codex/weather-daylight-simulation` to restore simulation weather atmosphere and replace the percentage timeline with a business clock.
+- Added App-level TDD coverage for the new clock labels, speed-driven time progression, and simulation scene weather/time state while preserving solo and multiplayer stand rendering expectations.
+- Reworked the simulation presentation into a weather-aware scene with a continuous sky gradient tied to simulation progress, then removed the temporary skyline props after browser review showed they looked like stray floating assets.
+- Validation passed with `npm test -- --run src/App.test.tsx`, the full Vitest suite, a production build, the required `web_game_playwright_client` run, and live browser inspection of hot/raining solo simulations on the LAN stack.
+- Playtest telemetry review outcome: `no change`, because the feature is presentation-only and existing telemetry already captures the gameplay-relevant raw inputs and outcomes.
+
+## 2026-03-19 10:22:00 PDT
+
+- Followed up on simulation readability in `codex/simulation-timeline-gap` by fixing two presentation bugs in the crowd playback.
+- Added red App tests first, then:
+  - delayed the visible sale amount until `outcomeAt` so prices do not appear during the walk-up
+  - switched customer sprite selection from `event.id.length` to `customerIndex` parity so consecutive customers no longer collapse into the same visual identity
+- Validation passed with targeted App/engine tests, the full Vitest suite, and a production build.
+- Browser notes:
+  - the first live browser attempt was blocked by a stale external server on port `3001`
+  - restarted this worktree's own LAN server and confirmed the simulation screen loads cleanly through the client on `5176`
+  - the web-game Playwright client produced artifact `output/web-game/simulation-timeline-gap-ui-followup/shot-0.png`

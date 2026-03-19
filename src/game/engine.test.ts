@@ -560,17 +560,61 @@ describe('multiplayer engine', () => {
     expect(event?.standStops.map((stop) => stop.playerId)).toEqual(['player-host', 'player-guest'])
     expect(event?.standStops[0]).toEqual({
       playerId: 'player-host',
-      arriveAt: 1_200,
-      departAt: 2_200,
+      arriveAt: 1_380,
+      departAt: 2_380,
     })
     expect(event?.standStops[1]).toEqual({
       playerId: 'player-guest',
-      arriveAt: 2_900,
-      departAt: 3_900,
+      arriveAt: 3_220,
+      departAt: 4_220,
     })
-    expect(event?.outcomeAt).toBe(3_900)
-    expect(event?.exitAt).toBe(4_800)
-    expect(simulated.simulation?.durationMs).toBeGreaterThanOrEqual(4_800)
+    expect(event?.outcomeAt).toBe(4_220)
+    expect(event?.exitAt).toBe(5_300)
+    expect(simulated.simulation?.durationMs).toBeGreaterThanOrEqual(5_300)
+  })
+
+  it('keeps the last customer active near the end of the simulation timeline', () => {
+    let room = createPlanningRoom(27)
+    room = {
+      ...room,
+      weather: 'sunny',
+      marketBasePrices: {
+        lemons: 0.5,
+        sugar: 0.2,
+        ice: 0.1,
+      },
+    }
+    room = updatePlayerPlan(room, 'player-host', {
+      purchases: { lemons: 20, sugar: 20, ice: 20 },
+      recipe: { lemons: 2, sugar: 2, ice: 2 },
+      price: 2.3,
+    })
+    room = updatePlayerPlan(room, 'player-guest', {
+      purchases: { lemons: 20, sugar: 20, ice: 20 },
+      recipe: { lemons: 2, sugar: 2, ice: 2 },
+      price: 1.5,
+    })
+    room = setPlayerReady(setPlayerReady(room, 'player-host', true), 'player-guest', true)
+
+    const simulated = startSimulation(room, {}, {
+      ...defaultBalanceConfig,
+      weatherProfiles: {
+        ...defaultBalanceConfig.weatherProfiles,
+        sunny: {
+          ...defaultBalanceConfig.weatherProfiles.sunny,
+          customerCount: 6,
+          baseWillingnessToPay: 2,
+          willingnessVariance: 0,
+        },
+      },
+    })
+
+    const durationMs = simulated.simulation?.durationMs ?? 0
+    const lastExitAt = Math.max(...(simulated.simulation?.events ?? []).map((event) => event.exitAt))
+
+    expect(durationMs).toBe(defaultBalanceConfig.simulationDurationMs)
+    expect(lastExitAt).toBeGreaterThanOrEqual(durationMs - 500)
+    expect(lastExitAt).toBeLessThan(durationMs)
   })
 
   it('records day history entries and preserves them into the next planning day', () => {
