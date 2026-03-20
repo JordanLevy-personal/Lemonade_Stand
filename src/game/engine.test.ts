@@ -1608,3 +1608,26 @@ describe('weather WTP and ingredient cost margin tuning', () => {
     expect(defaultBalanceConfig.marketPriceBands.ice).toEqual({ min: 0.05, max: 0.14 })
   })
 })
+
+describe('customer taste diversity', () => {
+  it('sets default customerTastePreferenceWeight to 0.35', () => {
+    expect(defaultBalanceConfig.customerTastePreferenceWeight).toBe(0.35)
+  })
+
+  it('preserves weather dominance: hot weather ice preference stays clearly positive at weight 0.35', () => {
+    // Hot weather ideal ice = 4, taste_offset = -2
+    // preferred_ice = 4 + (-2 * 0.35) = 3.3 — still clearly wants ice
+    const hotIdealIce = defaultBalanceConfig.weatherProfiles.hot.idealRecipe.ice
+    const preferredIce = hotIdealIce + (-2 * defaultBalanceConfig.customerTastePreferenceWeight)
+    expect(preferredIce).toBeGreaterThan(3)
+  })
+
+  it('creates interesting variation: rainy weather ice-averse customer still wants some ice at weight 0.35', () => {
+    // Rainy weather ideal ice = 0, taste_offset = +2
+    // preferred_ice = 0 + (2 * 0.35) = 0.7 — interesting variation, not game-breaking
+    const rainyIdealIce = defaultBalanceConfig.weatherProfiles.raining.idealRecipe.ice
+    const preferredIce = rainyIdealIce + (2 * defaultBalanceConfig.customerTastePreferenceWeight)
+    expect(preferredIce).toBeGreaterThan(0.5)
+    expect(preferredIce).toBeLessThan(1.0)
+  })
+})
