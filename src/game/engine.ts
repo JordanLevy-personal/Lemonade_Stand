@@ -28,6 +28,7 @@ const MIN_PRIMARY_RECIPE_INGREDIENT = 0.1
 const RECIPE_PRECISION = 1
 const INVENTORY_EPSILON = 1e-9
 const SATISFACTION_CURVE_EXPONENT = 2
+const PRICE_SCORE_EXPONENT = 6.4
 const CUSTOMER_ENTRY_TRAVEL_MS = 1_080
 const CUSTOMER_STAND_DWELL_MS = 1_000
 const CUSTOMER_BETWEEN_STANDS_MS = 840
@@ -584,11 +585,12 @@ function sampleCustomersForDay(
 }
 
 function priceScore(price: number, willingnessToPay: number): number {
-  if (price > willingnessToPay) {
+  if (price >= willingnessToPay) {
     return 0
   }
 
-  return clamp(1 - price / Math.max(willingnessToPay, 0.25), 0, 1)
+  const ratio = price / Math.max(willingnessToPay, 0.25)
+  return clamp(1 - ratio ** PRICE_SCORE_EXPONENT, 0, 1)
 }
 
 function curveScore(score: number): number {

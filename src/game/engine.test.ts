@@ -272,8 +272,50 @@ describe('multiplayer engine', () => {
     expect(score).toBe(0)
   })
 
-  it('applies a quadratic falloff to satisfaction for recipe fit and price', () => {
-    expect(calculateSatisfactionScore(0.5, 1, 2)).toBe(0.25)
+  it('applies a quadratic falloff to recipe fit but uses concave curve for price', () => {
+    // recipeFit=0.5, price=1, wtp=2 (50% of WTP)
+    // recipe component: curveScore(0.5) = 0.25, weighted: 0.25 * 0.7 = 0.175
+    // price component: concave curve at 50% WTP → near-perfect score (~0.98+)
+    // Total should be much higher than old value of 0.25
+    const satisfaction = calculateSatisfactionScore(0.5, 1, 2)
+    expect(satisfaction).toBeGreaterThan(0.45)
+    expect(satisfaction).toBeLessThan(0.50)
+  })
+
+  it('returns 0 price score when price equals WTP', () => {
+    // price === wtp → priceScore = 0
+    // With perfect recipe (fit=1.0): satisfaction = 1.0*0.7 + 0*0.3 = 0.7
+    expect(calculateSatisfactionScore(1.0, 2.0, 2.0)).toBe(0.7)
+  })
+
+  it('returns maximum price score when price is 0', () => {
+    // price = 0 → priceScore = 1.0 → curveScore = 1.0
+    // With perfect recipe: satisfaction = 1.0*0.7 + 1.0*0.3 = 1.0
+    expect(calculateSatisfactionScore(1.0, 0, 2.0)).toBe(1.0)
+  })
+
+  it('gives ~0.7 curved price score at 75% of WTP', () => {
+    // price = 1.5, wtp = 2.0 (75% of WTP)
+    // With perfect recipe (fit=1.0), recipe component = 0.7
+    // price component should be ~0.7 * 0.3 = 0.21
+    // Total satisfaction should be ~0.91
+    const satisfaction = calculateSatisfactionScore(1.0, 1.5, 2.0)
+    expect(satisfaction).toBeCloseTo(0.91, 1)
+  })
+
+  it('gives high price score at 50% of WTP', () => {
+    // price = 1.0, wtp = 2.0 → half price is very generous
+    // With perfect recipe: satisfaction should be near 1.0
+    const satisfaction = calculateSatisfactionScore(1.0, 1.0, 2.0)
+    expect(satisfaction).toBeGreaterThan(0.95)
+  })
+
+  it('produces satisfaction in 0.55-0.75 range for typical good play', () => {
+    // recipe_fit=0.85, price=$1.50, wtp=$2.00
+    // This is the plan's verification case
+    const satisfaction = calculateSatisfactionScore(0.85, 1.5, 2.0)
+    expect(satisfaction).toBeGreaterThan(0.55)
+    expect(satisfaction).toBeLessThan(0.75)
   })
 
   it('selects the strongest recipe feedback hint with deterministic tie-breaking', () => {
@@ -399,7 +441,7 @@ describe('multiplayer engine', () => {
         })),
       }
       room = updatePlayerPlan(room, 'player-host', {
-        price: 1.45,
+        price: 2.2,
         recipe: {
           lemons: 1,
           sugar: 1,
@@ -407,7 +449,7 @@ describe('multiplayer engine', () => {
         },
       })
       room = updatePlayerPlan(room, 'player-guest', {
-        price: 1.5,
+        price: 2.5,
         recipe: {
           lemons: 1,
           sugar: 1,
@@ -1280,12 +1322,12 @@ describe('persistent customer profiles', () => {
       room = updatePlayerPlan(room, 'player-host', {
         purchases: { lemons: 6, sugar: 6, ice: 6 },
         recipe: { lemons: 0, sugar: 0, ice: 5 },
-        price: 1.5,
+        price: 2.5,
       })
       room = updatePlayerPlan(room, 'player-guest', {
         purchases: { lemons: 6, sugar: 6, ice: 6 },
         recipe: { lemons: 3, sugar: 3, ice: 0 },
-        price: 1.5,
+        price: 2.5,
       })
       room = readyRoom(room)
 
