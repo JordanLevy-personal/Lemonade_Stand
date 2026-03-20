@@ -229,6 +229,22 @@ function createMultiplayerRoom(manager: RoomManager): RoomState {
   } as unknown as Parameters<RoomManager['createRoom']>[0])
 }
 
+function createScaledMultiplayerRoom(
+  manager: RoomManager,
+  targetPlayerCount: number,
+): RoomState {
+  return manager.createRoom({
+    roomId: 'ROOM01',
+    playerId: 'host-1',
+    name: 'Host',
+    faction: FACTION_ALPHA,
+    analyticsPlayerId: 'analytics-host',
+    gameMode: 'multiplayer',
+    targetPlayerCount,
+    runLengthDays: 14,
+  })
+}
+
 function createSingleplayerRoom(manager: RoomManager): RoomState {
   return manager.createRoom({
     roomId: 'SOLO1',
@@ -287,6 +303,60 @@ describe('RoomManager', () => {
     expect(room.phase).toBe('planning')
     expect(room.players).toHaveLength(2)
     expect(room.players[1]?.id).toBe('room01-player-2')
+  })
+
+  it('keeps a four-player room in the lobby until the fourth player joins', () => {
+    const manager = createManager()
+    createScaledMultiplayerRoom(manager, 4)
+
+    const secondPlayerRoom = manager.joinRoom({
+      roomId: 'ROOM01',
+      name: 'Guest 2',
+      faction: FACTION_BETA,
+      analyticsPlayerId: 'analytics-guest-2',
+    })
+    const thirdPlayerRoom = manager.joinRoom({
+      roomId: 'ROOM01',
+      name: 'Guest 3',
+      faction: FACTION_ALPHA,
+      analyticsPlayerId: 'analytics-guest-3',
+    })
+    const fourthPlayerRoom = manager.joinRoom({
+      roomId: 'ROOM01',
+      name: 'Guest 4',
+      faction: FACTION_BETA,
+      analyticsPlayerId: 'analytics-guest-4',
+    })
+
+    expect(secondPlayerRoom.phase).toBe('lobby')
+    expect(secondPlayerRoom.players).toHaveLength(2)
+    expect(thirdPlayerRoom.phase).toBe('lobby')
+    expect(thirdPlayerRoom.players).toHaveLength(3)
+    expect(fourthPlayerRoom.phase).toBe('planning')
+    expect(fourthPlayerRoom.players).toHaveLength(4)
+  })
+
+  it('keeps a three-player room in the lobby until the third player joins', () => {
+    const manager = createManager()
+    createScaledMultiplayerRoom(manager, 3)
+
+    const secondPlayerRoom = manager.joinRoom({
+      roomId: 'ROOM01',
+      name: 'Guest 2',
+      faction: FACTION_BETA,
+      analyticsPlayerId: 'analytics-guest-2',
+    })
+    const thirdPlayerRoom = manager.joinRoom({
+      roomId: 'ROOM01',
+      name: 'Guest 3',
+      faction: FACTION_ALPHA,
+      analyticsPlayerId: 'analytics-guest-3',
+    })
+
+    expect(secondPlayerRoom.phase).toBe('lobby')
+    expect(secondPlayerRoom.players).toHaveLength(2)
+    expect(thirdPlayerRoom.phase).toBe('planning')
+    expect(thirdPlayerRoom.players).toHaveLength(3)
   })
 
   it('purchases the recipe feedback hint upgrade during planning and deducts the cost', () => {
@@ -383,6 +453,93 @@ describe('RoomManager', () => {
     expect(secondResult.simulationStartedAt).toBe(13_000)
     expect(secondResult.room.phase).toBe('simulating')
     expect(secondResult.room.simulation?.simulationStartAt).toBe(13_000)
+  })
+
+  it('waits for all four players before starting simulation', () => {
+    const manager = createManager(12_000)
+    createScaledMultiplayerRoom(manager, 4)
+    manager.joinRoom({
+      roomId: 'ROOM01',
+      name: 'Guest 2',
+      faction: FACTION_BETA,
+      analyticsPlayerId: 'analytics-guest-2',
+    })
+    manager.joinRoom({
+      roomId: 'ROOM01',
+      name: 'Guest 3',
+      faction: FACTION_ALPHA,
+      analyticsPlayerId: 'analytics-guest-3',
+    })
+    manager.joinRoom({
+      roomId: 'ROOM01',
+      name: 'Guest 4',
+      faction: FACTION_BETA,
+      analyticsPlayerId: 'analytics-guest-4',
+    })
+
+    manager.submitPlan({
+      roomId: 'ROOM01',
+      playerId: 'host-1',
+      plan: DEFAULT_PLAN,
+    })
+    manager.submitPlan({
+      roomId: 'ROOM01',
+      playerId: 'room01-player-2',
+      plan: DEFAULT_PLAN,
+    })
+    const thirdResult = manager.submitPlan({
+      roomId: 'ROOM01',
+      playerId: 'room01-player-3',
+      plan: DEFAULT_PLAN,
+    })
+    const fourthResult = manager.submitPlan({
+      roomId: 'ROOM01',
+      playerId: 'room01-player-4',
+      plan: DEFAULT_PLAN,
+    })
+
+    expect(thirdResult.room.phase).toBe('planning')
+    expect(thirdResult.simulationStartedAt).toBeNull()
+    expect(fourthResult.room.phase).toBe('simulating')
+    expect(fourthResult.simulationStartedAt).toBe(13_000)
+  })
+
+  it('waits for all three players before starting simulation', () => {
+    const manager = createManager(12_000)
+    createScaledMultiplayerRoom(manager, 3)
+    manager.joinRoom({
+      roomId: 'ROOM01',
+      name: 'Guest 2',
+      faction: FACTION_BETA,
+      analyticsPlayerId: 'analytics-guest-2',
+    })
+    manager.joinRoom({
+      roomId: 'ROOM01',
+      name: 'Guest 3',
+      faction: FACTION_ALPHA,
+      analyticsPlayerId: 'analytics-guest-3',
+    })
+
+    manager.submitPlan({
+      roomId: 'ROOM01',
+      playerId: 'host-1',
+      plan: DEFAULT_PLAN,
+    })
+    const secondResult = manager.submitPlan({
+      roomId: 'ROOM01',
+      playerId: 'room01-player-2',
+      plan: DEFAULT_PLAN,
+    })
+    const thirdResult = manager.submitPlan({
+      roomId: 'ROOM01',
+      playerId: 'room01-player-3',
+      plan: DEFAULT_PLAN,
+    })
+
+    expect(secondResult.room.phase).toBe('planning')
+    expect(secondResult.simulationStartedAt).toBeNull()
+    expect(thirdResult.room.phase).toBe('simulating')
+    expect(thirdResult.simulationStartedAt).toBe(13_000)
   })
 
   it('starts simulation immediately once the solo player submits a plan', () => {
@@ -507,6 +664,69 @@ describe('RoomManager', () => {
     expect(afterSecondRequest.phase).toBe('planning')
     expect(afterSecondRequest.day).toBe(2)
     expect(afterSecondRequest.players.every((player) => player.hasSubmittedPlan === false)).toBe(true)
+  })
+
+  it('waits for all four players to request the next day before resetting planning', () => {
+    const manager = createManager()
+    createScaledMultiplayerRoom(manager, 4)
+    manager.joinRoom({
+      roomId: 'ROOM01',
+      name: 'Guest 2',
+      faction: FACTION_BETA,
+      analyticsPlayerId: 'analytics-guest-2',
+    })
+    manager.joinRoom({
+      roomId: 'ROOM01',
+      name: 'Guest 3',
+      faction: FACTION_ALPHA,
+      analyticsPlayerId: 'analytics-guest-3',
+    })
+    manager.joinRoom({
+      roomId: 'ROOM01',
+      name: 'Guest 4',
+      faction: FACTION_BETA,
+      analyticsPlayerId: 'analytics-guest-4',
+    })
+
+    for (const playerId of ['host-1', 'room01-player-2', 'room01-player-3', 'room01-player-4']) {
+      manager.submitPlan({
+        roomId: 'ROOM01',
+        playerId,
+        plan: DEFAULT_PLAN,
+      })
+    }
+    manager.completeSimulation('ROOM01')
+
+    const requestOne = manager.requestNextDay({
+      roomId: 'ROOM01',
+      playerId: 'host-1',
+    })
+    const requestTwo = manager.requestNextDay({
+      roomId: 'ROOM01',
+      playerId: 'room01-player-2',
+    })
+    const requestThree = manager.requestNextDay({
+      roomId: 'ROOM01',
+      playerId: 'room01-player-3',
+    })
+    const requestFour = manager.requestNextDay({
+      roomId: 'ROOM01',
+      playerId: 'room01-player-4',
+    })
+
+    expect(requestOne.phase).toBe('results')
+    expect(requestOne.requestedNextDayPlayerIds).toEqual(['host-1'])
+    expect(requestTwo.requestedNextDayPlayerIds).toEqual(['host-1', 'room01-player-2'])
+    expect(requestThree.requestedNextDayPlayerIds).toEqual(['host-1', 'room01-player-2', 'room01-player-3'])
+    expect(requestFour.phase).toBe('planning')
+    expect(requestFour.day).toBe(2)
+  })
+
+  it('rejects unsupported multiplayer player counts', () => {
+    const manager = createManager()
+
+    expect(() => createScaledMultiplayerRoom(manager, 1)).toThrow()
+    expect(() => createScaledMultiplayerRoom(manager, 5)).toThrow()
   })
 
   it('advances to the next day immediately after the solo player requests it', () => {

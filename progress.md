@@ -54,21 +54,19 @@ Original prompt: ok lets add a quick feature for computing the amount of cups th
 - Validation passed with targeted App tests, the full Vitest suite, a production build, the required `web_game_playwright_client` run, and a two-page Playwright browser sanity pass with screenshot artifact `output/web-game/recipe-sliders-planning/host-planning.png`.
 - Browser sanity showed the planning screen rendering the slider controls correctly with no host/guest console errors during the live host/join flow.
 
-## 2026-03-19 13:10:00 PDT
+## 2026-03-18 22:48:12 PDT
 
-- Created branch `codex/fix-ice-wrap` directly from `origin/main` for a small UI polish pass without opening a new task workspace.
-- Added a dedicated planning inventory layout hook so the stock forecast cards wrap into a stable two-column grid, which keeps the `Ice` card inside the panel instead of drifting into an awkward overflow state.
-- Added a regression test for the planning inventory layout hook and another for sale-price timing during simulation playback.
-- Updated sale-price timing so buy amounts show no later than 500 ms before a customer exits, even when the purchase resolves close to the leave animation.
-- Validation passed with a production build, focused Vitest coverage for the touched planning and playback behaviors, the required `web_game_playwright_client` run, and a larger Playwright screenshot at `output/web-game/ice-wrap-fix/planning-full.png` confirming the inventory cards render with `Ice` on a second row.
-- A broad `vitest run src/App.test.tsx` pass became noisy while the live dev client/browser validation was running because mirrored worktree specs in the repo timed out under contention; no failures were found in the focused tests covering the touched behavior.
+- Began the multiplayer player scaling session on `codex/multiplayer-player-scaling` in a dedicated worktree.
+- Confirmed the original prompt remains recorded above and created a matching task workspace at `tasks/active/multiplayer-player-scaling/`.
+- Current plan of attack: add failing tests for 3-4 player hosting/readiness/layout, implement shared player-count validation plus count-aware UI, then run targeted and browser-level validation before opening a PR.
 
-## 2026-03-19 13:18:00 PDT
+## 2026-03-18 23:41:30 PDT
 
-- Corrected the first UI fix after confirming the reported overflow was in the `Buy ingredients` market panel, not the stock forecast cards.
-- Added a dedicated responsive grid hook for the planning market inputs, let the market panel shrink safely with `min-width: 0`, and reduced the ingredient number inputs to compact pill widths closer to the price input.
-- Increased the sale-price playback lead-in from 500 ms to 750 ms and updated the focused timing regression accordingly.
-- Re-validated with focused Vitest coverage, a production build, and a full-page planning screenshot at `output/web-game/ice-wrap-fix/planning-market-1436-full.png` showing the `Ice` purchase field wrapped inside the market panel at the problematic desktop width.
+- Added 4-player TDD coverage in the room manager and App suites before changing the implementation.
+- Shipped shared player-count validation, a multiplayer room-size selector, count-aware waiting/planning/results copy, and four-stand simulation layout support with compact stand styling for larger rooms.
+- Added a `WS_PROXY_TARGET_PORT` Vite dev-server override so the worktree client can validate against a non-3001 server when another local session is already using that default port.
+- Validation passed with the full Vitest suite, a production build, the bundled multiplayer entry Playwright script, and a separate four-context Playwright sanity run that reached live simulation with four visible stands and no browser errors.
+- Telemetry review outcome: no catalog changes needed because `playerCount` is already captured for both game-level and player-day analysis.
 
 ## 2026-03-19 10:05:47 PDT
 
@@ -89,3 +87,19 @@ Original prompt: ok lets add a quick feature for computing the amount of cups th
   - the first live browser attempt was blocked by a stale external server on port `3001`
   - restarted this worktree's own LAN server and confirmed the simulation screen loads cleanly through the client on `5176`
   - the web-game Playwright client produced artifact `output/web-game/simulation-timeline-gap-ui-followup/shot-0.png`
+
+## 2026-03-19 13:10:00 PDT
+
+- Created branch `codex/fix-ice-wrap` directly from `origin/main` for a small UI polish pass without opening a new task workspace.
+- Added a dedicated planning inventory layout hook so the stock forecast cards wrap into a stable two-column grid, which keeps the `Ice` card inside the panel instead of drifting into an awkward overflow state.
+- Added a regression test for the planning inventory layout hook and another for sale-price timing during simulation playback.
+- Updated sale-price timing so buy amounts show no later than 500 ms before a customer exits, even when the purchase resolves close to the leave animation.
+- Validation passed with a production build, focused Vitest coverage for the touched planning and playback behaviors, the required `web_game_playwright_client` run, and a larger Playwright screenshot at `output/web-game/ice-wrap-fix/planning-full.png` confirming the inventory cards render with `Ice` on a second row.
+- A broad `vitest run src/App.test.tsx` pass became noisy while the live dev client/browser validation was running because mirrored worktree specs in the repo timed out under contention; no failures were found in the focused tests covering the touched behavior.
+
+## 2026-03-19 13:18:00 PDT
+
+- Corrected the first UI fix after confirming the reported overflow was in the `Buy ingredients` market panel, not the stock forecast cards.
+- Added a dedicated responsive grid hook for the planning market inputs, let the market panel shrink safely with `min-width: 0`, and reduced the ingredient number inputs to compact pill widths closer to the price input.
+- Increased the sale-price playback lead-in from 500 ms to 750 ms and updated the focused timing regression accordingly.
+- Re-validated with focused Vitest coverage, a production build, and a full-page planning screenshot at `output/web-game/ice-wrap-fix/planning-market-1436-full.png` showing the `Ice` purchase field wrapped inside the market panel at the problematic desktop width.

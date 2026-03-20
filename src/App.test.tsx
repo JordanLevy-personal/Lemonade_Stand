@@ -1,7 +1,8 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react'
+import type { ReactElement } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import App, { ROOM_SESSION_KEY } from './App'
+import App, { RESULTS_CHART_LAYOUT_KEY, ROOM_SESSION_KEY, standAnchorPercents } from './App'
 import type { RoomConnection, RoomConnectionHandlers } from './client/socket'
 import type { FactionDefinition, Recipe, RoomState } from './client/protocol'
 
@@ -23,6 +24,22 @@ vi.mock('./client/socket', () => ({
   },
 }))
 
+vi.mock('recharts', async () => {
+  const actual = await vi.importActual<typeof import('recharts')>('recharts')
+  const react = await vi.importActual<typeof import('react')>('react')
+
+  return {
+    ...actual,
+    ResponsiveContainer: ({ children }: { children?: unknown }) =>
+      react.isValidElement(children)
+        ? react.cloneElement(
+            children as ReactElement<{ height?: number; width?: number }>,
+            { height: 336, width: 720 },
+          )
+        : null,
+  }
+})
+
 const SUN_FACTION: FactionDefinition = {
   id: 'sun-guild',
   name: 'Sun Guild',
@@ -34,6 +51,13 @@ const MARKET_FACTION: FactionDefinition = {
   name: 'Market Tide',
   accentColor: '#4b8e8d',
 }
+
+const PLAYER_FIXTURES = [
+  { id: 'player-host', name: 'Alex', faction: SUN_FACTION },
+  { id: 'player-guest', name: 'Blair', faction: MARKET_FACTION },
+  { id: 'player-third', name: 'Casey', faction: SUN_FACTION },
+  { id: 'player-fourth', name: 'Devon', faction: MARKET_FACTION },
+] as const
 
 type RecipeFeedbackHint = {
   ingredient: 'lemons' | 'sugar' | 'ice'
@@ -78,66 +102,7 @@ function createRoom(overrides: Partial<RoomState> = {}): RoomState {
     simulation: null,
     pausedFromPhase: null,
     requestedNextDayPlayerIds: [],
-    players: [
-      {
-        id: 'player-host',
-        name: 'Alex',
-        faction: SUN_FACTION,
-        money: 20,
-        inventory: {
-          lemons: 0,
-          sugar: 0,
-          ice: 0,
-        },
-        reputation: 50,
-        hasSubmittedPlan: false,
-        connectionStatus: 'connected',
-        dailyPlan: {
-          purchases: {
-            lemons: 1,
-            sugar: 1,
-            ice: 1,
-          },
-          recipe: {
-            lemons: 2,
-            sugar: 2,
-            ice: 3,
-          },
-          price: 1.4,
-        },
-        dailyResults: null,
-        history: [],
-      } as TestPlayerState,
-      {
-        id: 'player-guest',
-        name: 'Blair',
-        faction: MARKET_FACTION,
-        money: 20,
-        inventory: {
-          lemons: 0,
-          sugar: 0,
-          ice: 0,
-        },
-        reputation: 50,
-        hasSubmittedPlan: false,
-        connectionStatus: 'connected',
-        dailyPlan: {
-          purchases: {
-            lemons: 1,
-            sugar: 1,
-            ice: 1,
-          },
-          recipe: {
-            lemons: 2,
-            sugar: 2,
-            ice: 2,
-          },
-          price: 1.5,
-        },
-        dailyResults: null,
-        history: [],
-      } as TestPlayerState,
-    ],
+    players: createPlayers(2),
     ...overrides,
   } as RoomState
 }
@@ -159,6 +124,38 @@ function createHistoryEntry(overrides: Partial<HistoryEntry> = {}): HistoryEntry
     },
     ...overrides,
   }
+}
+
+function createPlayers(playerCount: number): RoomState['players'] {
+  return PLAYER_FIXTURES.slice(0, playerCount).map((player, index) => ({
+    id: player.id,
+    name: player.name,
+    faction: player.faction,
+    money: 20,
+    inventory: {
+      lemons: 0,
+      sugar: 0,
+      ice: 0,
+    },
+    reputation: 50,
+    hasSubmittedPlan: false,
+    connectionStatus: 'connected' as const,
+    dailyPlan: {
+      purchases: {
+        lemons: 1,
+        sugar: 1,
+        ice: 1,
+      },
+      recipe: {
+        lemons: 2,
+        sugar: 2,
+        ice: index === 0 ? 3 : 2,
+      },
+      price: 1.4 + index * 0.1,
+    },
+    dailyResults: null,
+    history: [],
+  } as TestPlayerState))
 }
 
 function createHostRoom(
@@ -425,6 +422,95 @@ function emitMessage(message: unknown): void {
   })
 }
 
+function openResultsScreen(players = createResultsPlayers()): void {
+  render(<App />)
+
+  fireEvent.change(screen.getByLabelText(/your name/i), {
+    target: { value: 'Alex' },
+  })
+  fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+  emitMessage({
+    type: 'connected',
+    roomId: 'ROOM-42',
+    playerId: 'player-host',
+    hostPlayerId: 'player-host',
+  })
+  emitMessage({
+    type: 'room_state',
+    room: createRoom({
+      phase: 'results',
+      players,
+    }),
+  })
+}
+
+function createResultsPlayers(
+  overrides?: (player: RoomState['players'][number], index: number) => Partial<RoomState['players'][number]>,
+): RoomState['players'] {
+  return createRoom().players.map((player, index) => ({
+    ...player,
+    dailyResults: {
+      cupsSold: 10 - index,
+      revenue: 18 - index * 4,
+      satisfaction: 0.8 - index * 0.1,
+      reputationDelta: 4 - index,
+      customersWon: 10 - index,
+      customersSkipped: 3 + index,
+      customersSoldOut: index,
+    },
+    history: [
+      createHistoryEntry({
+        day: 1,
+        revenue: 15 - index * 4,
+        purchaseCost: 5,
+        profit: 10 - index * 4,
+        endingMoney: 24 + index,
+        reputationAfter: 50 + index,
+        cupsSold: 8 - index,
+        satisfaction: 0.7 - index * 0.1,
+        recipeSnapshot: {
+          lemons: 1 + index * 0.5,
+          sugar: 2,
+          ice: 3 - index,
+        },
+      }),
+      createHistoryEntry({
+        day: 2,
+        revenue: 18 - index * 4,
+        purchaseCost: 6,
+        profit: 12 - index * 4,
+        endingMoney: 30 + index,
+        reputationAfter: 54 + index,
+        cupsSold: 10 - index,
+        satisfaction: 0.8 - index * 0.1,
+        recipeSnapshot: {
+          lemons: 1.5 + index * 0.5,
+          sugar: 2.5,
+          ice: 2 - index,
+        },
+      }),
+    ],
+    ...overrides?.(player, index),
+  })) as RoomState['players']
+}
+
+function getPerformanceLineCurves(): SVGPathElement[] {
+  return [...document.querySelectorAll<SVGPathElement>('.results-chart-shell-performance .recharts-line-curve')]
+}
+
+function getPerformanceLegendSwatch(label: RegExp): HTMLElement {
+  const legend = screen.getByLabelText(/performance legend/i)
+  const seriesLabel = within(legend).getByText(label)
+  const swatch = seriesLabel.closest('.summary-chip')?.querySelector('.chart-legend-swatch')
+
+  if (!(swatch instanceof HTMLElement)) {
+    throw new Error(`Unable to find legend swatch for ${label.toString()}`)
+  }
+
+  return swatch
+}
+
 describe('App', () => {
   beforeEach(() => {
     latestHandlers = null
@@ -461,6 +547,44 @@ describe('App', () => {
         runLengthDays: 14,
         faction: SUN_FACTION,
         analyticsPlayerId: expect.any(String),
+      }),
+    )
+  })
+
+  it('creates a four-player room from the lobby when the host selects four players', () => {
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.change(screen.getByLabelText(/players in room/i), {
+      target: { value: '4' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    expect(sendMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'create_room',
+        targetPlayerCount: 4,
+      }),
+    )
+  })
+
+  it('creates a three-player room from the lobby when the host selects three players', () => {
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.change(screen.getByLabelText(/players in room/i), {
+      target: { value: '3' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    expect(sendMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'create_room',
+        targetPlayerCount: 3,
       }),
     )
   })
@@ -528,6 +652,69 @@ describe('App', () => {
     expect(screen.getByText(/share your .*client url/i)).toBeInTheDocument()
     expect(screen.getByText(/join room room-42/i)).toBeInTheDocument()
     expect(screen.queryByText(/lan/i)).not.toBeInTheDocument()
+  })
+
+  it('shows the joined roster and open seats for a four-player waiting room', () => {
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.change(screen.getByLabelText(/players in room/i), {
+      target: { value: '4' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'room_state',
+      room: createRoom({
+        phase: 'lobby',
+        targetPlayerCount: 4,
+        players: createPlayers(3),
+      }),
+    })
+
+    expect(screen.getByText(/1 seat open/i)).toBeInTheDocument()
+    expect(screen.getByText(/alex/i)).toBeInTheDocument()
+    expect(screen.getByText(/blair/i)).toBeInTheDocument()
+    expect(screen.getByText(/casey/i)).toBeInTheDocument()
+  })
+
+  it('shows the joined roster and open seats for a three-player waiting room', () => {
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.change(screen.getByLabelText(/players in room/i), {
+      target: { value: '3' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'room_state',
+      room: createRoom({
+        phase: 'lobby',
+        targetPlayerCount: 3,
+        players: createPlayers(2),
+      }),
+    })
+
+    expect(screen.getByText(/1 seat open/i)).toBeInTheDocument()
+    expect(screen.getByText(/alex/i)).toBeInTheDocument()
+    expect(screen.getByText(/blair/i)).toBeInTheDocument()
   })
 
   it('submits a private plan during planning', () => {
@@ -1169,6 +1356,133 @@ describe('App', () => {
     expect(screen.getAllByText(/alex/i).length).toBeGreaterThan(0)
     expect(screen.getAllByText(/blair/i).length).toBeGreaterThan(0)
     expect(screen.getByLabelText(/time: 11:20 am/i)).toBeInTheDocument()
+  })
+
+  it('renders all four stands during a four-player simulation', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-03-16T12:00:02.000Z'))
+
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.change(screen.getByLabelText(/players in room/i), {
+      target: { value: '4' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'simulation_started',
+      simulationStartAt: Date.parse('2026-03-16T12:00:00.000Z'),
+      room: createRoom({
+        phase: 'simulating',
+        targetPlayerCount: 4,
+        players: createPlayers(4),
+        simulation: {
+          durationMs: 6000,
+          simulationStartAt: Date.parse('2026-03-16T12:00:00.000Z'),
+          customerEvents: [
+            createSimulationEvent(),
+            createSimulationEvent({
+              id: 'event-b',
+              customerId: 'customer-b',
+              customerIndex: 1,
+              spawnAt: 400,
+              outcomeAt: 1_900,
+              exitAt: 2_400,
+              standStops: [
+                {
+                  playerId: 'player-fourth',
+                  arriveAt: 900,
+                  departAt: 1_900,
+                },
+              ],
+              targetPlayerId: 'player-fourth',
+              salePrice: 1.7,
+              satisfaction: 0.9,
+              willingnessToPay: 2.2,
+            }),
+          ],
+        },
+      }),
+    })
+
+    expect(screen.getByAltText(/alex stand/i)).toBeInTheDocument()
+    expect(screen.getByAltText(/blair stand/i)).toBeInTheDocument()
+    expect(screen.getByAltText(/casey stand/i)).toBeInTheDocument()
+    expect(screen.getByAltText(/devon stand/i)).toBeInTheDocument()
+  })
+
+  it('renders three stands during a three-player simulation', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-03-16T12:00:02.000Z'))
+
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.change(screen.getByLabelText(/players in room/i), {
+      target: { value: '3' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'simulation_started',
+      simulationStartAt: Date.parse('2026-03-16T12:00:00.000Z'),
+      room: createRoom({
+        phase: 'simulating',
+        targetPlayerCount: 3,
+        players: createPlayers(3),
+        simulation: {
+          durationMs: 6000,
+          simulationStartAt: Date.parse('2026-03-16T12:00:00.000Z'),
+          customerEvents: [
+            createSimulationEvent(),
+            createSimulationEvent({
+              id: 'event-c',
+              customerId: 'customer-c',
+              customerIndex: 2,
+              spawnAt: 500,
+              outcomeAt: 2_000,
+              exitAt: 2_600,
+              standStops: [
+                {
+                  playerId: 'player-third',
+                  arriveAt: 900,
+                  departAt: 2_000,
+                },
+              ],
+              targetPlayerId: 'player-third',
+              salePrice: 1.6,
+              satisfaction: 0.88,
+              willingnessToPay: 2.1,
+            }),
+          ],
+        },
+      }),
+    })
+
+    expect(screen.getByAltText(/alex stand/i)).toBeInTheDocument()
+    expect(screen.getByAltText(/blair stand/i)).toBeInTheDocument()
+    expect(screen.getByAltText(/casey stand/i)).toBeInTheDocument()
+  })
+
+  it('spreads stand anchors evenly for counts above four', () => {
+    expect(standAnchorPercents(5)).toEqual([10, 30, 50, 70, 90])
   })
 
   it('shows only one stand during a singleplayer simulation', () => {
@@ -2192,6 +2506,48 @@ describe('App', () => {
     })
   })
 
+  it('uses all-player copy for multiplayer results in larger rooms', () => {
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.change(screen.getByLabelText(/players in room/i), {
+      target: { value: '4' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'room_state',
+      room: createRoom({
+        phase: 'results',
+        targetPlayerCount: 4,
+        players: createPlayers(4).map((player) => ({
+          ...player,
+          dailyResults: {
+            cupsSold: 8,
+            revenue: 12,
+            satisfaction: 0.72,
+            reputationDelta: 2,
+            customersWon: 8,
+            customersSkipped: 3,
+            customersSoldOut: 0,
+          },
+        })),
+      }),
+    })
+
+    expect(screen.getByText(/compare all stands/i)).toBeInTheDocument()
+    expect(screen.getByText(/when everyone is ready/i)).toBeInTheDocument()
+    expect(screen.queryByText(/compare both stands/i)).not.toBeInTheDocument()
+  })
+
   it('uses next day copy for singleplayer results', () => {
     render(<App />)
 
@@ -2305,6 +2661,27 @@ describe('App', () => {
   })
 
   it('switches the results chart with metric filter buttons', () => {
+    openResultsScreen()
+
+    expect(screen.getByRole('heading', { name: /revenue over time/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /revenue \+ profit/i })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /revenue \+ profit/i }))
+    expect(screen.getByRole('heading', { name: /revenue and profit over time/i })).toBeInTheDocument()
+    expect(screen.getByText(/alex revenue/i)).toBeInTheDocument()
+    expect(screen.getByText(/alex profit/i)).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /^money$/i }))
+    expect(screen.getByRole('heading', { name: /money over time/i })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /^satisfaction$/i }))
+    expect(screen.getByRole('heading', { name: /satisfaction over time/i })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /^profit$/i }))
+    expect(screen.getByRole('heading', { name: /profit over time/i })).toBeInTheDocument()
+  })
+
+  it('splits the main chart, promotes the next chart, and recombines it into the filter pool', () => {
     render(<App />)
 
     fireEvent.change(screen.getByLabelText(/your name/i), {
@@ -2369,22 +2746,227 @@ describe('App', () => {
       }),
     })
 
+    const filterRow = screen.getByRole('group', { name: /results chart filters/i })
+
     expect(screen.getByRole('heading', { name: /revenue over time/i })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /revenue \+ profit/i })).toBeInTheDocument()
+    expect(within(filterRow).getByRole('button', { name: /^revenue$/i })).toHaveAttribute('aria-pressed', 'true')
+
+    fireEvent.click(screen.getByRole('button', { name: /split chart/i }))
+
+    expect(screen.getByRole('heading', { name: /profit over time/i })).toBeInTheDocument()
+    expect(within(filterRow).queryByRole('button', { name: /^revenue$/i })).not.toBeInTheDocument()
+
+    const splitCharts = screen.getByLabelText(/split results charts/i)
+
+    expect(within(splitCharts).getByRole('heading', { name: /revenue over time/i })).toBeInTheDocument()
+
+    fireEvent.click(within(splitCharts).getByRole('button', { name: /recombine/i }))
+
+    expect(screen.queryByLabelText(/split results charts/i)).not.toBeInTheDocument()
+    expect(within(filterRow).getByRole('button', { name: /^revenue$/i })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: /profit over time/i })).toBeInTheDocument()
+  })
+
+  it('assigns different player colors to multiplayer chart lines even when factions match', () => {
+    openResultsScreen(
+      createResultsPlayers((_, index) => ({
+        faction: SUN_FACTION,
+        name: index === 0 ? 'Alex' : 'Blair',
+      })),
+    )
+
+    const lineStrokes = getPerformanceLineCurves()
+      .map((curve) => curve.getAttribute('stroke'))
+      .filter((stroke): stroke is string => stroke !== null)
+
+    expect(lineStrokes).toHaveLength(2)
+    expect(new Set(lineStrokes).size).toBe(2)
+
+    const alexSwatch = getPerformanceLegendSwatch(/^alex$/i)
+    const blairSwatch = getPerformanceLegendSwatch(/^blair$/i)
+    const alexColor = alexSwatch.getAttribute('data-series-color')
+    const blairColor = blairSwatch.getAttribute('data-series-color')
+
+    expect(alexColor).toBeTruthy()
+    expect(blairColor).toBeTruthy()
+    expect(alexColor).not.toBe(blairColor)
+    expect(lineStrokes).toContain(alexColor!)
+    expect(lineStrokes).toContain(blairColor!)
+  })
+
+  it('keeps a shared player color for revenue and profit overlay while marking profit as dashed', () => {
+    openResultsScreen(
+      createResultsPlayers((_, index) => ({
+        faction: SUN_FACTION,
+        name: index === 0 ? 'Alex' : 'Blair',
+      })),
+    )
 
     fireEvent.click(screen.getByRole('button', { name: /revenue \+ profit/i }))
-    expect(screen.getByRole('heading', { name: /revenue and profit over time/i })).toBeInTheDocument()
-    expect(screen.getByText(/alex revenue/i)).toBeInTheDocument()
-    expect(screen.getByText(/alex profit/i)).toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole('button', { name: /^money$/i }))
-    expect(screen.getByRole('heading', { name: /money over time/i })).toBeInTheDocument()
+    const curves = getPerformanceLineCurves()
+    const curveColors = curves
+      .map((curve) => curve.getAttribute('stroke'))
+      .filter((stroke): stroke is string => stroke !== null)
 
-    fireEvent.click(screen.getByRole('button', { name: /^satisfaction$/i }))
-    expect(screen.getByRole('heading', { name: /satisfaction over time/i })).toBeInTheDocument()
+    expect(curves).toHaveLength(4)
+    expect(new Set(curveColors).size).toBe(2)
 
-    fireEvent.click(screen.getByRole('button', { name: /^profit$/i }))
-    expect(screen.getByRole('heading', { name: /profit over time/i })).toBeInTheDocument()
+    const alexRevenueSwatch = getPerformanceLegendSwatch(/alex revenue/i)
+    const alexProfitSwatch = getPerformanceLegendSwatch(/alex profit/i)
+    const blairRevenueSwatch = getPerformanceLegendSwatch(/blair revenue/i)
+    const blairProfitSwatch = getPerformanceLegendSwatch(/blair profit/i)
+
+    expect(alexRevenueSwatch).toHaveAttribute('data-series-color', alexProfitSwatch.getAttribute('data-series-color'))
+    expect(blairRevenueSwatch).toHaveAttribute('data-series-color', blairProfitSwatch.getAttribute('data-series-color'))
+    expect(alexRevenueSwatch.getAttribute('data-series-color')).not.toBe(blairRevenueSwatch.getAttribute('data-series-color'))
+    expect(alexRevenueSwatch).toHaveAttribute('data-series-dash', 'solid')
+    expect(blairRevenueSwatch).toHaveAttribute('data-series-dash', 'solid')
+    expect(alexProfitSwatch).toHaveAttribute('data-series-dash', '6 5')
+    expect(blairProfitSwatch).toHaveAttribute('data-series-dash', '6 5')
+  })
+
+  it('persists split charts and recipe player selection across refresh', () => {
+    const firstRender = render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'room_state',
+      room: createOwnedEspionageRoom({
+        phase: 'results',
+        players: createOwnedEspionageRoom().players.map((player, index) => ({
+          ...player,
+          dailyResults: {
+            cupsSold: 10 - index,
+            revenue: 18 - index * 4,
+            satisfaction: 0.8 - index * 0.1,
+            reputationDelta: 4 - index,
+            customersWon: 10 - index,
+            customersSkipped: 3 + index,
+            customersSoldOut: index,
+          },
+          history: [
+            createHistoryEntry({
+              day: 1,
+              revenue: 15 - index * 4,
+              profit: 10 - index * 4,
+              endingMoney: 25 + index,
+              reputationAfter: 50 + index,
+              cupsSold: 8 - index,
+              satisfaction: 0.7 - index * 0.1,
+              recipeSnapshot: {
+                lemons: 1 + index,
+                sugar: 2,
+                ice: 3 - index,
+              },
+            }),
+            createHistoryEntry({
+              day: 2,
+              revenue: 18 - index * 4,
+              profit: 12 - index * 4,
+              endingMoney: 30 + index,
+              reputationAfter: 54 + index,
+              cupsSold: 10 - index,
+              satisfaction: 0.8 - index * 0.1,
+              recipeSnapshot: {
+                lemons: 1.5 + index,
+                sugar: 2.5,
+                ice: 2 - index,
+              },
+            }),
+          ],
+        })),
+      }),
+    })
+
+    const filterRow = screen.getByRole('group', { name: /results chart filters/i })
+
+    fireEvent.click(within(filterRow).getByRole('button', { name: /^recipe$/i }))
+    expect(screen.getByRole('heading', { name: /recipe over time: alex/i })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /blair/i }))
+    expect(screen.getByRole('heading', { name: /recipe over time: blair/i })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /split chart/i }))
+    expect(within(filterRow).queryByRole('button', { name: /^recipe$/i })).not.toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: /revenue over time/i })).toBeInTheDocument()
+    expect(screen.getByLabelText(/split results charts/i)).toHaveTextContent(/recipe over time: blair/i)
+
+    firstRender.unmount()
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'room_state',
+      room: createOwnedEspionageRoom({
+        phase: 'results',
+        players: createOwnedEspionageRoom().players.map((player, index) => ({
+          ...player,
+          dailyResults: {
+            cupsSold: 10 - index,
+            revenue: 18 - index * 4,
+            satisfaction: 0.8 - index * 0.1,
+            reputationDelta: 4 - index,
+            customersWon: 10 - index,
+            customersSkipped: 3 + index,
+            customersSoldOut: index,
+          },
+          history: [
+            createHistoryEntry({
+              day: 1,
+              revenue: 15 - index * 4,
+              profit: 10 - index * 4,
+              endingMoney: 25 + index,
+              reputationAfter: 50 + index,
+              cupsSold: 8 - index,
+              satisfaction: 0.7 - index * 0.1,
+              recipeSnapshot: {
+                lemons: 1 + index,
+                sugar: 2,
+                ice: 3 - index,
+              },
+            }),
+            createHistoryEntry({
+              day: 2,
+              revenue: 18 - index * 4,
+              profit: 12 - index * 4,
+              endingMoney: 30 + index,
+              reputationAfter: 54 + index,
+              cupsSold: 10 - index,
+              satisfaction: 0.8 - index * 0.1,
+              recipeSnapshot: {
+                lemons: 1.5 + index,
+                sugar: 2.5,
+                ice: 2 - index,
+              },
+            }),
+          ],
+        })),
+      }),
+    })
+
+    expect(screen.getByRole('heading', { name: /revenue over time/i })).toBeInTheDocument()
+    expect(screen.getByLabelText(/split results charts/i)).toHaveTextContent(/recipe over time: blair/i)
   })
 
   it('locks opponent recipe history until market espionage is owned', () => {
@@ -2449,6 +3031,10 @@ describe('App', () => {
         })),
       }),
     })
+
+    const filterRow = screen.getByRole('group', { name: /results chart filters/i })
+
+    fireEvent.click(within(filterRow).getByRole('button', { name: /^recipe$/i }))
 
     expect(screen.getByRole('heading', { name: /recipe over time: alex/i })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /alex/i })).toHaveAttribute('aria-pressed', 'true')
@@ -2527,6 +3113,9 @@ describe('App', () => {
       }),
     })
 
+    const filterRow = screen.getByRole('group', { name: /results chart filters/i })
+
+    fireEvent.click(within(filterRow).getByRole('button', { name: /^recipe$/i }))
     fireEvent.click(screen.getByRole('button', { name: /blair/i }))
 
     expect(screen.getByRole('heading', { name: /recipe over time: blair/i })).toBeInTheDocument()
@@ -2534,7 +3123,140 @@ describe('App', () => {
     expect(screen.queryByText(/buy market espionage to reveal/i)).not.toBeInTheDocument()
   })
 
-  it('shows an empty-state message when chart history is unavailable', () => {
+  it('keeps split charts unique and hides them from the main chart filter row', () => {
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'room_state',
+      room: createRoom({
+        phase: 'results',
+        players: createRoom().players.map((player, index) => ({
+          ...player,
+          dailyResults: {
+            cupsSold: 10 - index,
+            revenue: 18 - index * 4,
+            satisfaction: 0.8 - index * 0.1,
+            reputationDelta: 4 - index,
+            customersWon: 10 - index,
+            customersSkipped: 3 + index,
+            customersSoldOut: index,
+          },
+          history: [
+            createHistoryEntry({
+              day: 1,
+              revenue: 15 - index * 4,
+              purchaseCost: 5,
+              profit: 10 - index * 4,
+              endingMoney: 24 + index,
+              reputationAfter: 50 + index,
+              cupsSold: 8 - index,
+              satisfaction: 0.7 - index * 0.1,
+              recipeSnapshot: {
+                lemons: 1 + index * 0.5,
+                sugar: 2,
+                ice: 3 - index,
+              },
+            }),
+            createHistoryEntry({
+              day: 2,
+              revenue: 18 - index * 4,
+              purchaseCost: 6,
+              profit: 12 - index * 4,
+              endingMoney: 30 + index,
+              reputationAfter: 54 + index,
+              cupsSold: 10 - index,
+              satisfaction: 0.8 - index * 0.1,
+              recipeSnapshot: {
+                lemons: 1.5 + index * 0.5,
+                sugar: 2.5,
+                ice: 2 - index,
+              },
+            }),
+          ],
+        })),
+      }),
+    })
+
+    const filterRow = screen.getByRole('group', { name: /results chart filters/i })
+
+    fireEvent.click(screen.getByRole('button', { name: /split chart/i }))
+    fireEvent.click(screen.getByRole('button', { name: /split chart/i }))
+
+    const splitCharts = screen.getByLabelText(/split results charts/i)
+
+    expect(within(splitCharts).getAllByRole('button', { name: /recombine/i })).toHaveLength(2)
+    expect(within(filterRow).queryByRole('button', { name: /^revenue$/i })).not.toBeInTheDocument()
+    expect(within(filterRow).queryByRole('button', { name: /^profit$/i })).not.toBeInTheDocument()
+  })
+
+  it('falls back to the default chart layout when stored layout data is stale or invalid', () => {
+    window.localStorage.setItem(
+      RESULTS_CHART_LAYOUT_KEY,
+      JSON.stringify({
+        version: 1,
+        mainChartId: 'mystery-chart',
+        splitChartIds: ['ghost-chart'],
+        recipe: {
+          selectedPlayerId: 'missing-player',
+        },
+      }),
+    )
+
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'room_state',
+      room: createRoom({
+        phase: 'results',
+        players: createRoom().players.map((player, index) => ({
+          ...player,
+          dailyResults: {
+            cupsSold: 10 - index,
+            revenue: 18 - index * 4,
+            satisfaction: 0.8 - index * 0.1,
+            reputationDelta: 4 - index,
+            customersWon: 10 - index,
+            customersSkipped: 3 + index,
+            customersSoldOut: index,
+          },
+          history: [
+            createHistoryEntry({
+              day: 1,
+              revenue: 15 - index * 4,
+              profit: 10 - index * 4,
+            }),
+          ],
+        })),
+      }),
+    })
+
+    expect(screen.getByRole('heading', { name: /revenue over time/i })).toBeInTheDocument()
+    expect(screen.queryByLabelText(/split results charts/i)).not.toBeInTheDocument()
+  })
+
+  it('shows empty-state messages in both the main slot and split chart area when history is unavailable', () => {
     render(<App />)
 
     fireEvent.change(screen.getByLabelText(/your name/i), {
@@ -2568,8 +3290,20 @@ describe('App', () => {
       }),
     })
 
+    const filterRow = screen.getByRole('group', { name: /results chart filters/i })
+
     expect(screen.getByText(/play another day to start building a trend line for this stand/i)).toBeInTheDocument()
+
+    fireEvent.click(within(filterRow).getByRole('button', { name: /^recipe$/i }))
+
     expect(screen.getByText(/play another day to start tracking recipe trends/i)).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /split chart/i }))
+
+    const splitCharts = screen.getByLabelText(/split results charts/i)
+
+    expect(screen.getByText(/play another day to start building a trend line for this stand/i)).toBeInTheDocument()
+    expect(within(splitCharts).getByText(/play another day to start tracking recipe trends/i)).toBeInTheDocument()
   })
 
   it('shows a final singleplayer summary without a next-day button', () => {

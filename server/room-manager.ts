@@ -11,6 +11,7 @@ import type {
   Weather,
 } from './contracts'
 import type { SimulationTelemetry } from '../src/game/types'
+import { validateTargetPlayerCount } from '../src/shared/room-player-count'
 import { determineFinalOutcome, normalizeRunLengthDays } from './final-outcome'
 import { isUpgradeOwned, unlockUpgrade } from '../src/game/upgrades'
 
@@ -158,19 +159,20 @@ export class RoomManager {
   }
 
   createRoom(input: CreateRoomInput): RoomState {
+    const targetPlayerCount = validateTargetPlayerCount(input.gameMode, input.targetPlayerCount)
     const { weather, marketBasePrices, customerRoster, rngSeed } = this.hooks.createDay(1)
     const defaults = this.hooks.createPlayerDefaults()
     const room: RoomState = {
       roomId: input.roomId,
       hostPlayerId: input.playerId,
       gameMode: input.gameMode,
-      targetPlayerCount: Math.max(1, input.targetPlayerCount),
+      targetPlayerCount,
       day: 1,
       runLengthDays: normalizeRunLengthDays(input.runLengthDays),
       isGameComplete: false,
       finalOutcome: null,
       weather,
-      phase: input.targetPlayerCount === 1 ? 'planning' : 'lobby',
+      phase: targetPlayerCount === 1 ? 'planning' : 'lobby',
       players: [
         {
           id: input.playerId,
