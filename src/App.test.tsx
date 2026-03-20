@@ -223,6 +223,17 @@ function getFeedbackSummaryCard(name: string): HTMLElement {
   return summaryName.closest('.feedback-summary-card') as HTMLElement
 }
 
+function getUpgradeItem(name: RegExp): HTMLElement {
+  const label = screen.getByText(name)
+  const item = label.closest('.upgrade-item')
+
+  if (item === null) {
+    throw new Error(`Unable to find upgrade item for ${name.toString()}`)
+  }
+
+  return item as HTMLElement
+}
+
 function createSimulationEvent(
   overrides: Partial<TestSimulationEvent> = {},
 ): TestSimulationEvent {
@@ -263,6 +274,23 @@ function createOwnedHintRoom(overrides: Partial<RoomState> = {}): RoomState {
             ...player,
             money: 40,
             ownedUpgrades: ['recipe-feedback-hints'],
+          } as TestPlayerState)
+        : player,
+    ),
+  } as RoomState
+}
+
+function createOwnedEspionageRoom(overrides: Partial<RoomState> = {}): RoomState {
+  const room = createRoom(overrides)
+
+  return {
+    ...room,
+    players: room.players.map((player, index) =>
+      index === 0
+        ? ({
+            ...player,
+            money: 40,
+            ownedUpgrades: ['market-espionage'],
           } as TestPlayerState)
         : player,
     ),
@@ -920,11 +948,13 @@ describe('App', () => {
       room: createRoom(),
     })
 
+    const upgradeItem = getUpgradeItem(/recipe feedback hints/i)
+
     expect(screen.getByRole('heading', { name: /upgrades/i })).toBeInTheDocument()
-    expect(screen.getByText(/show one emoji hint after your buys and skips/i)).toBeInTheDocument()
-    expect(screen.getByLabelText(/recipe feedback hints status: need \$5\.00/i)).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /^buy$/i })).toBeDisabled()
-    expect(screen.getByText(/\$25\.00/)).toBeInTheDocument()
+    expect(within(upgradeItem).getByText(/show one emoji hint after your buys and skips/i)).toBeInTheDocument()
+    expect(within(upgradeItem).getByLabelText(/recipe feedback hints status: need \$5\.00/i)).toBeInTheDocument()
+    expect(within(upgradeItem).getByRole('button', { name: /^buy$/i })).toBeDisabled()
+    expect(within(upgradeItem).getByText(/\$25\.00/)).toBeInTheDocument()
   })
 
   it('allows buying the recipe feedback hint upgrade during planning', () => {
@@ -954,7 +984,7 @@ describe('App', () => {
       }),
     })
 
-    fireEvent.click(screen.getByRole('button', { name: /^buy$/i }))
+    fireEvent.click(within(getUpgradeItem(/recipe feedback hints/i)).getByRole('button', { name: /^buy$/i }))
 
     expect(sendMock).toHaveBeenLastCalledWith({
       type: 'purchase_upgrade',
@@ -985,9 +1015,48 @@ describe('App', () => {
       }),
     })
 
-    expect(screen.getByLabelText(/recipe feedback hints status: owned/i)).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /^owned$/i })).toBeDisabled()
-    expect(screen.getByText(/show one emoji hint after your buys and skips/i)).toBeInTheDocument()
+    const upgradeItem = getUpgradeItem(/recipe feedback hints/i)
+
+    expect(within(upgradeItem).getByLabelText(/recipe feedback hints status: owned/i)).toBeInTheDocument()
+    expect(within(upgradeItem).getByRole('button', { name: /^owned$/i })).toBeDisabled()
+    expect(within(upgradeItem).getByText(/show one emoji hint after your buys and skips/i)).toBeInTheDocument()
+  })
+
+  it('allows buying the market espionage upgrade during planning', () => {
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'room_state',
+      room: createRoom({
+        players: [
+          {
+            ...createRoom().players[0],
+            money: 40,
+          } as TestPlayerState,
+          createRoom().players[1],
+        ],
+      }),
+    })
+
+    fireEvent.click(within(getUpgradeItem(/market espionage/i)).getByRole('button', { name: /^buy$/i }))
+
+    expect(sendMock).toHaveBeenLastCalledWith({
+      type: 'purchase_upgrade',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      upgradeId: 'market-espionage',
+    })
   })
 
   it('shows explicit thumbs-up and thumbs-down counts in results', () => {
@@ -2318,7 +2387,7 @@ describe('App', () => {
     expect(screen.getByRole('heading', { name: /profit over time/i })).toBeInTheDocument()
   })
 
-  it('shows a separate recipe chart and lets multiplayer players switch the visible history', () => {
+  it('locks opponent recipe history until market espionage is owned', () => {
     render(<App />)
 
     fireEvent.change(screen.getByLabelText(/your name/i), {
@@ -2383,11 +2452,86 @@ describe('App', () => {
 
     expect(screen.getByRole('heading', { name: /recipe over time: alex/i })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /alex/i })).toHaveAttribute('aria-pressed', 'true')
+    const blairButton = screen.getByRole('button', { name: /blair/i })
+
+    expect(blairButton).toHaveAttribute('aria-disabled', 'true')
+    expect(blairButton).toHaveAttribute('title', 'Buy Market Espionage to see their data.')
+
+    fireEvent.click(blairButton)
+
+    expect(screen.getByRole('heading', { name: /recipe over time: alex/i })).toBeInTheDocument()
+    expect(blairButton).toHaveAttribute('aria-pressed', 'false')
+    expect(screen.getByLabelText(/recipe legend/i)).toBeInTheDocument()
+  })
+
+  it('unlocks opponent recipe history when market espionage is owned', () => {
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your name/i), {
+      target: { value: 'Alex' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+    emitMessage({
+      type: 'connected',
+      roomId: 'ROOM-42',
+      playerId: 'player-host',
+      hostPlayerId: 'player-host',
+    })
+    emitMessage({
+      type: 'room_state',
+      room: createOwnedEspionageRoom({
+        phase: 'results',
+        players: createOwnedEspionageRoom().players.map((player, index) => ({
+          ...player,
+          dailyResults: {
+            cupsSold: 10 - index,
+            revenue: 18 - index * 4,
+            satisfaction: 0.8 - index * 0.1,
+            reputationDelta: 4 - index,
+            customersWon: 10 - index,
+            customersSkipped: 3 + index,
+            customersSoldOut: index,
+          },
+          history: [
+            createHistoryEntry({
+              day: 1,
+              revenue: 15 - index * 4,
+              profit: 10 - index * 4,
+              endingMoney: 25 + index,
+              reputationAfter: 50 + index,
+              cupsSold: 8 - index,
+              satisfaction: 0.7 - index * 0.1,
+              recipeSnapshot: {
+                lemons: 1 + index,
+                sugar: 2,
+                ice: 3 - index,
+              },
+            }),
+            createHistoryEntry({
+              day: 2,
+              revenue: 18 - index * 4,
+              profit: 12 - index * 4,
+              endingMoney: 30 + index,
+              reputationAfter: 54 + index,
+              cupsSold: 10 - index,
+              satisfaction: 0.8 - index * 0.1,
+              recipeSnapshot: {
+                lemons: 1.5 + index,
+                sugar: 2.5,
+                ice: 2 - index,
+              },
+            }),
+          ],
+        })),
+      }),
+    })
 
     fireEvent.click(screen.getByRole('button', { name: /blair/i }))
 
     expect(screen.getByRole('heading', { name: /recipe over time: blair/i })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /blair/i })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByLabelText(/recipe legend/i)).toBeInTheDocument()
+    expect(screen.queryByText(/buy market espionage to reveal/i)).not.toBeInTheDocument()
   })
 
   it('shows an empty-state message when chart history is unavailable', () => {

@@ -22,7 +22,8 @@ import {
   emptyInventory,
   sanitizeRecipe,
 } from './game/engine'
-import type { DailyPlan, Inventory, Recipe } from './game/types'
+import { getUpgradeOwnershipKey } from './game/upgrades'
+import type { DailyPlan, Inventory, Recipe, RunUpgradeId } from './game/types'
 import type {
   ClientMessage,
   CustomerEvent,
@@ -47,7 +48,7 @@ const INVENTORY_PRECISION = 1
 const SATISFACTION_APPROVAL_THRESHOLD = 0.55
 const SALE_TAG_LEAD_IN_MS = 750
 const RECIPE_FEEDBACK_HINT_UPGRADE_ID = 'recipe-feedback-hints'
-const RECIPE_FEEDBACK_HINT_UPGRADE_COST = 25
+const MARKET_ESPIONAGE_UPGRADE_ID = 'market-espionage'
 const BASE_SIMULATION_SPEED = 1
 const MIN_DEV_SIMULATION_SPEED = 0.25
 const MAX_DEV_SIMULATION_SPEED = 2
@@ -85,6 +86,13 @@ interface FeedbackChipDefinition {
   count: number
 }
 
+interface AppUpgradeDefinition {
+  id: RunUpgradeId
+  name: string
+  description: string
+  cost: number
+}
+
 type HistoryEntry = RoomState['players'][number]['history'][number] & {
   endingMoney?: number
   recipeSnapshot?: Recipe
@@ -104,6 +112,22 @@ interface ChartSeries {
   stroke: string
   dash?: string
 }
+
+const PLANNING_UPGRADES: readonly AppUpgradeDefinition[] = [
+  {
+    id: RECIPE_FEEDBACK_HINT_UPGRADE_ID,
+    name: 'Recipe feedback hints',
+    description: 'Show one emoji hint after your buys and skips.',
+    cost: defaultBalanceConfig.recipeFeedbackHintUpgradeCost,
+  },
+  {
+    id: MARKET_ESPIONAGE_UPGRADE_ID,
+    name: 'Market Espionage',
+    description: "Unlock opponents' recipe history in results.",
+    cost: defaultBalanceConfig.marketEspionageUpgradeCost,
+  },
+] as const
+
 type SceneTimeOfDay = 'morning' | 'midday' | 'afternoon' | 'dusk'
 type HslColor = [number, number, number]
 type DevWeatherOverride = 'live' | Weather
@@ -821,24 +845,29 @@ function readRecipeFeedbackHint(event: CustomerEvent): RecipeFeedbackHint | null
   )
 }
 
-function isRecipeFeedbackHintUpgradeOwned(player: RoomState['players'][number] | null): boolean {
+function isUpgradeOwned(
+  player: RoomState['players'][number] | null,
+  upgradeId: RunUpgradeId,
+): boolean {
   if (player === null) {
     return false
   }
 
   const upgradeState = player as RoomState['players'][number] & PlayerUpgradeState
   const ownedUpgrades = upgradeState.ownedUpgrades ?? upgradeState.upgrades ?? upgradeState.upgradeKeys
+  const ownershipKey = getUpgradeOwnershipKey(upgradeId)
 
   if (Array.isArray(ownedUpgrades)) {
-    return ownedUpgrades.includes(RECIPE_FEEDBACK_HINT_UPGRADE_ID)
+    return ownedUpgrades.includes(upgradeId)
   }
 
   if (ownedUpgrades !== null && typeof ownedUpgrades === 'object') {
     const record = ownedUpgrades as Record<string, unknown>
     return Boolean(
-      record[RECIPE_FEEDBACK_HINT_UPGRADE_ID] ??
-        record.recipeFeedbackHints ??
-        record['recipe-feedback-hints'],
+      record[upgradeId] ??
+        record[ownershipKey] ??
+        record['recipe-feedback-hints'] ??
+        record['market-espionage'],
     )
   }
 
@@ -1117,6 +1146,29 @@ function recipeChartHasData(player: ChartPlayer | null): boolean {
   return player !== null && player.history.some((entry) => entry.recipeSnapshot !== undefined)
 }
 
+function canViewRecipeHistoryPlayer({
+  currentPlayer,
+  currentPlayerId,
+  targetPlayerId,
+  targetPlayerCount,
+}: {
+  currentPlayer: ChartPlayer | null
+  currentPlayerId: string | null
+  targetPlayerId: string | null
+  targetPlayerCount: number
+}): boolean {
+  if (
+    targetPlayerCount <= 1 ||
+    currentPlayerId === null ||
+    targetPlayerId === null ||
+    targetPlayerId === currentPlayerId
+  ) {
+    return true
+  }
+
+  return isUpgradeOwned(currentPlayer, MARKET_ESPIONAGE_UPGRADE_ID)
+}
+
 function buildPlan(currentPlayer: ReturnType<typeof findCurrentPlayer>): DailyPlan {
   if (currentPlayer === null || currentPlayer.dailyPlan === null) {
     return {
@@ -1187,16 +1239,18 @@ function InventoryMetrics({
   )
 }
 
-function UpgradeFeedbackRow({
+function UpgradeRow({
   currentPlayer,
+  upgrade,
   onPurchaseUpgrade,
 }: {
   currentPlayer: NonNullable<ReturnType<typeof findCurrentPlayer>>
-  onPurchaseUpgrade: () => void
+  upgrade: AppUpgradeDefinition
+  onPurchaseUpgrade: (upgradeId: RunUpgradeId) => void
 }): JSX.Element {
-  const hasUpgrade = isRecipeFeedbackHintUpgradeOwned(currentPlayer)
-  const canAfford = currentPlayer.money >= RECIPE_FEEDBACK_HINT_UPGRADE_COST
-  const missingMoney = Math.max(0, RECIPE_FEEDBACK_HINT_UPGRADE_COST - currentPlayer.money)
+  const hasUpgrade = isUpgradeOwned(currentPlayer, upgrade.id)
+  const canAfford = currentPlayer.money >= upgrade.cost
+  const missingMoney = Math.max(0, upgrade.cost - currentPlayer.money)
   const buttonDisabled = hasUpgrade || !canAfford || currentPlayer.hasSubmittedPlan
 
   const status = hasUpgrade
@@ -1210,15 +1264,15 @@ function UpgradeFeedbackRow({
   return (
     <article className="upgrade-item">
       <div className="upgrade-copy">
-        <p className="upgrade-name">Recipe feedback hints</p>
-        <p className="muted upgrade-description">Show one emoji hint after your buys and skips.</p>
+        <p className="upgrade-name">{upgrade.name}</p>
+        <p className="muted upgrade-description">{upgrade.description}</p>
       </div>
       <div className="upgrade-actions">
-        <span className="upgrade-cost">{formatMoney(RECIPE_FEEDBACK_HINT_UPGRADE_COST)}</span>
+        <span className="upgrade-cost">{formatMoney(upgrade.cost)}</span>
         <button
           className="action-button action-button-secondary"
           disabled={buttonDisabled}
-          onClick={onPurchaseUpgrade}
+          onClick={() => onPurchaseUpgrade(upgrade.id)}
           type="button"
         >
           {hasUpgrade
@@ -1228,7 +1282,7 @@ function UpgradeFeedbackRow({
               : 'Buy'}
         </button>
         <span
-          aria-label={`recipe feedback hints status: ${status.toLowerCase()}`}
+          aria-label={`${upgrade.name.toLowerCase()} status: ${status.toLowerCase()}`}
           className="upgrade-status"
         >
           {status}
@@ -1243,14 +1297,21 @@ function UpgradesPanel({
   onPurchaseUpgrade,
 }: {
   currentPlayer: NonNullable<ReturnType<typeof findCurrentPlayer>>
-  onPurchaseUpgrade: () => void
+  onPurchaseUpgrade: (upgradeId: RunUpgradeId) => void
 }): JSX.Element {
   return (
     <section className="panel upgrade-panel">
       <p className="eyebrow">Planning</p>
       <h2>Upgrades</h2>
       <div className="upgrade-list">
-        <UpgradeFeedbackRow currentPlayer={currentPlayer} onPurchaseUpgrade={onPurchaseUpgrade} />
+        {PLANNING_UPGRADES.map((upgrade) => (
+          <UpgradeRow
+            currentPlayer={currentPlayer}
+            key={upgrade.id}
+            onPurchaseUpgrade={onPurchaseUpgrade}
+            upgrade={upgrade}
+          />
+        ))}
       </div>
     </section>
   )
@@ -1280,7 +1341,7 @@ function ResultsFeedbackSummary({
       <div className="feedback-summary-grid">
         {room.players.map((player) => {
           const showHintCounts =
-            currentPlayerId === player.id && isRecipeFeedbackHintUpgradeOwned(player)
+            currentPlayerId === player.id && isUpgradeOwned(player, RECIPE_FEEDBACK_HINT_UPGRADE_ID)
           const summary = summarizeFeedbackForPlayer({
             room,
             playerId: player.id,
@@ -1531,7 +1592,7 @@ function PlanningScreen({
   error: string | null
   onPlanChange: (next: DailyPlan) => void
   onLockIn: () => void
-  onPurchaseUpgrade: () => void
+  onPurchaseUpgrade: (upgradeId: RunUpgradeId) => void
 }): JSX.Element {
   const market = room.marketBasePrices ?? emptyInventory()
   const spend = room.marketBasePrices === null ? 0 : calculatePurchaseCost(market, localPlan.purchases)
@@ -1762,7 +1823,7 @@ function SimulationScreen({
   )
   const liveInventory = inventoryForSimulation(currentPlayer, simulation.customerEvents, elapsedMs)
   const visiblePlayers = room.targetPlayerCount === 1 ? room.players.slice(0, 1) : room.players
-  const hasHintUpgrade = isRecipeFeedbackHintUpgradeOwned(currentPlayer)
+  const hasHintUpgrade = isUpgradeOwned(currentPlayer, RECIPE_FEEDBACK_HINT_UPGRADE_ID)
   const progress = simulationProgress(elapsedMs, simulation.durationMs)
   const businessClock = formatBusinessClock(progress)
   const timeOfDay = sceneTimeOfDay(progress)
@@ -1966,6 +2027,7 @@ function ResultsScreen({
     currentPlayerId !== null && room.requestedNextDayPlayerIds.includes(currentPlayerId)
   const isSingleplayerRoom = room.targetPlayerCount === 1
   const chartPlayers = room.players as ChartPlayer[]
+  const currentPlayer = chartPlayers.find((player) => player.id === currentPlayerId) ?? null
   const [selectedMetric, setSelectedMetric] = useState<ResultsChartMode>('revenue')
   const [selectedRecipePlayerId, setSelectedRecipePlayerId] = useState<string | null>(
     () => currentPlayerId ?? chartPlayers[0]?.id ?? null,
@@ -1986,13 +2048,22 @@ function ResultsScreen({
     }
 
     setSelectedRecipePlayerId((currentValue) => {
-      if (currentValue !== null && chartPlayers.some((player) => player.id === currentValue)) {
+      if (
+        currentValue !== null &&
+        chartPlayers.some((player) => player.id === currentValue) &&
+        canViewRecipeHistoryPlayer({
+          currentPlayer,
+          currentPlayerId,
+          targetPlayerId: currentValue,
+          targetPlayerCount: room.targetPlayerCount,
+        })
+      ) {
         return currentValue
       }
 
       return currentPlayerId ?? chartPlayers[0]!.id
     })
-  }, [chartPlayers, currentPlayerId])
+  }, [chartPlayers, currentPlayer, currentPlayerId, room.targetPlayerCount])
 
   return (
     <section className="app-stage">
@@ -2106,17 +2177,40 @@ function ResultsScreen({
           </div>
           {room.targetPlayerCount > 1 ? (
             <div aria-label="Recipe history player selector" className="results-filter-row" role="group">
-              {chartPlayers.map((player) => (
-                <button
-                  aria-pressed={player.id === selectedRecipePlayerId}
-                  className={player.id === selectedRecipePlayerId ? 'filter-chip filter-chip-active' : 'filter-chip'}
-                  key={player.id}
-                  onClick={() => setSelectedRecipePlayerId(player.id)}
-                  type="button"
-                >
-                  {player.name}
-                </button>
-              ))}
+              {chartPlayers.map((player) => {
+                const canViewPlayerHistory = canViewRecipeHistoryPlayer({
+                  currentPlayer,
+                  currentPlayerId,
+                  targetPlayerId: player.id,
+                  targetPlayerCount: room.targetPlayerCount,
+                })
+
+                return (
+                  <button
+                    aria-disabled={!canViewPlayerHistory}
+                    aria-pressed={player.id === selectedRecipePlayerId}
+                    className={[
+                      'filter-chip',
+                      player.id === selectedRecipePlayerId ? 'filter-chip-active' : '',
+                      !canViewPlayerHistory ? 'filter-chip-disabled' : '',
+                    ].filter(Boolean).join(' ')}
+                    key={player.id}
+                    onClick={() => {
+                      if (canViewPlayerHistory) {
+                        setSelectedRecipePlayerId(player.id)
+                      }
+                    }}
+                    title={
+                      canViewPlayerHistory
+                        ? undefined
+                        : 'Buy Market Espionage to see their data.'
+                    }
+                    type="button"
+                  >
+                    {player.name}
+                  </button>
+                )
+              })}
             </div>
           ) : null}
         </div>
@@ -2505,7 +2599,7 @@ function App(): JSX.Element {
     })
   }
 
-  function purchaseRecipeFeedbackHintsUpgrade(): void {
+  function purchaseUpgrade(upgradeId: RunUpgradeId): void {
     if (room === null || session === null) {
       return
     }
@@ -2514,7 +2608,7 @@ function App(): JSX.Element {
       type: 'purchase_upgrade',
       roomId: room.roomId,
       playerId: session.playerId,
-      upgradeId: RECIPE_FEEDBACK_HINT_UPGRADE_ID,
+      upgradeId,
     } as unknown as ClientMessage)
   }
 
@@ -2572,7 +2666,7 @@ function App(): JSX.Element {
           error={error}
           onPlanChange={setLocalPlan}
           onLockIn={lockInPlan}
-          onPurchaseUpgrade={purchaseRecipeFeedbackHintsUpgrade}
+          onPurchaseUpgrade={purchaseUpgrade}
         />
       ) : null}
       {room?.phase === 'simulating' && currentPlayer !== null ? (

@@ -478,6 +478,7 @@ describe('multiplayer engine', () => {
               ...player,
               ownedUpgrades: {
                 recipeFeedbackHints: true,
+                marketEspionage: false,
               },
             }
           : player,
@@ -712,6 +713,7 @@ describe('multiplayer engine', () => {
               ...player,
               ownedUpgrades: {
                 recipeFeedbackHints: true,
+                marketEspionage: false,
               },
             }
           : player,
@@ -1032,6 +1034,7 @@ describe('multiplayer engine', () => {
               ...player,
               ownedUpgrades: {
                 recipeFeedbackHints: true,
+                marketEspionage: false,
               },
             }
           : player,

@@ -1,5 +1,6 @@
 import { defaultBalanceConfig } from './balance'
 import { nextFloat, nextInt, normalizeSeed } from './rng'
+import { defaultOwnedUpgrades } from './upgrades'
 import type {
   BalanceConfig,
   CustomerOfferResult,
@@ -12,7 +13,6 @@ import type {
   DailyPlan,
   FactionDefinition,
   Inventory,
-  OwnedUpgrades,
   PlayerDailyResults,
   PlayerState,
   Recipe,
@@ -74,12 +74,6 @@ function cloneInventory(inventory: Inventory): Inventory {
     lemons: inventory.lemons,
     sugar: inventory.sugar,
     ice: inventory.ice,
-  }
-}
-
-function defaultOwnedUpgrades(): OwnedUpgrades {
-  return {
-    recipeFeedbackHints: false,
   }
 }
 

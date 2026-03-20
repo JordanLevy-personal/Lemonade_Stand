@@ -199,7 +199,7 @@ describe('createLanServer', () => {
       input: {
         roomId: string
         playerId: string
-        upgradeId: 'recipe-feedback-hints'
+        upgradeId: string
       },
     ) {
       const room = this.getRoom(input.roomId)
@@ -215,7 +215,7 @@ describe('createLanServer', () => {
             ? {
                 ...player,
                 ownedUpgrades: {
-                  ...(player.ownedUpgrades ?? { recipeFeedbackHints: false }),
+                  ...(player.ownedUpgrades ?? { recipeFeedbackHints: false, marketEspionage: false }),
                   recipeFeedbackHints: true,
                 },
               }
@@ -460,6 +460,215 @@ describe('createLanServer', () => {
 
     purchaseSpy.mockRestore()
     submitSpy.mockRestore()
+  })
+
+  it('redacts opponent recipe history until market espionage is owned', async () => {
+    const joinSpy = vi.spyOn(RoomManager.prototype, 'joinRoom').mockImplementation(function (
+      this: RoomManager,
+      input: {
+        roomId: string
+        name: string
+        faction: {
+          id: string
+          name: string
+          accentColor: string
+        }
+        analyticsPlayerId: string
+      },
+    ) {
+      const room = this.getRoom(input.roomId)
+
+      if (room === null) {
+        throw new Error('Room not found.')
+      }
+
+      const updatedRoom = {
+        ...room,
+        phase: 'planning' as const,
+        players: [
+          {
+            ...room.players[0]!,
+            history: [
+              {
+                day: 1,
+                revenue: 18,
+                purchaseCost: 6,
+                profit: 12,
+                endingMoney: 24,
+                reputationAfter: 52,
+                cupsSold: 12,
+                satisfaction: 0.8,
+                recipeSnapshot: {
+                  lemons: 2,
+                  sugar: 2,
+                  ice: 3,
+                },
+              },
+            ],
+          },
+          {
+            id: 'room01-player-2',
+            name: input.name,
+            faction: input.faction,
+            money: 20,
+            inventory: {
+              lemons: 0,
+              sugar: 0,
+              ice: 0,
+            },
+            reputation: 50,
+            ownedUpgrades: {
+              recipeFeedbackHints: false,
+              marketEspionage: false,
+            },
+            dailyPlan: null,
+            dailyResults: null,
+            history: [
+              {
+                day: 1,
+                revenue: 15,
+                purchaseCost: 5,
+                profit: 10,
+                endingMoney: 21,
+                reputationAfter: 51,
+                cupsSold: 10,
+                satisfaction: 0.7,
+                recipeSnapshot: {
+                  lemons: 1,
+                  sugar: 3,
+                  ice: 2,
+                },
+              },
+            ],
+            hasSubmittedPlan: false,
+            connectionStatus: 'connected' as const,
+          },
+        ],
+      }
+
+      ;(this as unknown as { rooms: Map<string, unknown> }).rooms.set(input.roomId, updatedRoom)
+      return updatedRoom
+    })
+    const purchaseSpy = vi.spyOn(RoomManager.prototype, 'purchaseUpgrade').mockImplementation(function (
+      this: RoomManager,
+      input: {
+        roomId: string
+        playerId: string
+        upgradeId: string
+      },
+    ) {
+      const room = this.getRoom(input.roomId)
+
+      if (room === null) {
+        throw new Error('Room not found.')
+      }
+
+      const updatedRoom = {
+        ...room,
+        players: room.players.map((player) =>
+          player.id === input.playerId
+            ? {
+                ...player,
+                ownedUpgrades: {
+                  ...(player.ownedUpgrades ?? { recipeFeedbackHints: false, marketEspionage: false }),
+                  marketEspionage: true,
+                },
+              }
+            : player,
+        ),
+      }
+
+      ;(this as unknown as { rooms: Map<string, unknown> }).rooms.set(input.roomId, updatedRoom)
+      return updatedRoom
+    })
+
+    const server = await createLanServer({
+      port: 0,
+    })
+    servers.push(server)
+
+    const hostSocket = new WebSocket(`ws://127.0.0.1:${server.port}`)
+    const guestSocket = new WebSocket(`ws://127.0.0.1:${server.port}`)
+    sockets.push(hostSocket, guestSocket)
+    await Promise.all([waitForOpen(hostSocket), waitForOpen(guestSocket)])
+
+    const hostMessages = trackMessages(hostSocket)
+    const guestMessages = trackMessages(guestSocket)
+
+    hostSocket.send(
+      JSON.stringify({
+        type: 'create_room',
+        name: 'Alex',
+        gameMode: 'multiplayer',
+        targetPlayerCount: 2,
+        runLengthDays: 14,
+        faction: {
+          id: 'sun-guild',
+          name: 'Sun Guild',
+          accentColor: '#f3b63f',
+        },
+        analyticsPlayerId: 'analytics-host',
+      }),
+    )
+
+    await new Promise((resolve) => setTimeout(resolve, 25))
+    const hostConnected = latestParsedMessage(hostMessages, 'connected')
+    const roomId = String(hostConnected?.roomId)
+
+    guestSocket.send(
+      JSON.stringify({
+        type: 'join_room',
+        roomId,
+        name: 'Blair',
+        faction: {
+          id: 'market-tide',
+          name: 'Market Tide',
+          accentColor: '#4b8e8d',
+        },
+        analyticsPlayerId: 'analytics-guest',
+      }),
+    )
+
+    await new Promise((resolve) => setTimeout(resolve, 25))
+    const postJoinHostRoom = latestParsedMessage(hostMessages, 'room_state')
+    const postJoinGuestRoom = latestParsedMessage(guestMessages, 'room_state')
+    const hostPlayers = (postJoinHostRoom?.room as { players?: Array<{ id: string; history: Array<{ recipeSnapshot?: unknown }> }> })?.players ?? []
+    const guestPlayers = (postJoinGuestRoom?.room as { players?: Array<{ id: string; history: Array<{ recipeSnapshot?: unknown }> }> })?.players ?? []
+
+    expect(hostPlayers.find((player) => player.id === hostConnected?.playerId)?.history[0]?.recipeSnapshot).toEqual({
+      lemons: 2,
+      sugar: 2,
+      ice: 3,
+    })
+    expect(hostPlayers.find((player) => player.id === 'room01-player-2')?.history[0]?.recipeSnapshot).toBeUndefined()
+    expect(guestPlayers.find((player) => player.id === 'room01-player-2')?.history[0]?.recipeSnapshot).toEqual({
+      lemons: 1,
+      sugar: 3,
+      ice: 2,
+    })
+    expect(guestPlayers.find((player) => player.id === hostConnected?.playerId)?.history[0]?.recipeSnapshot).toBeUndefined()
+
+    hostSocket.send(
+      JSON.stringify({
+        type: 'purchase_upgrade',
+        roomId,
+        playerId: String(hostConnected?.playerId),
+        upgradeId: 'market-espionage',
+      }),
+    )
+
+    await new Promise((resolve) => setTimeout(resolve, 25))
+    const unlockedHostRoom = latestParsedMessage(hostMessages, 'room_state')
+    const unlockedHostPlayers = (unlockedHostRoom?.room as { players?: Array<{ id: string; history: Array<{ recipeSnapshot?: unknown }> }> })?.players ?? []
+
+    expect(unlockedHostPlayers.find((player) => player.id === 'room01-player-2')?.history[0]?.recipeSnapshot).toEqual({
+      lemons: 1,
+      sugar: 3,
+      ice: 2,
+    })
+
+    joinSpy.mockRestore()
+    purchaseSpy.mockRestore()
   })
 
   it('persists game, player-day, customer profile, and customer event telemetry after simulation starts', async () => {
