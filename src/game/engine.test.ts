@@ -8,6 +8,8 @@ import {
   calculateSellableCups,
   calculateSatisfactionScore,
   calculateStandScore,
+  _calculateReputationDelta,
+  _effectiveWtp,
   createRoom,
   customerCountForWeather,
   enterResultsPhase,
@@ -1535,6 +1537,76 @@ describe('persistent customer profiles', () => {
 
     expect(host?.dailyResults.cupsSold).toBe(0)
     expect(guest?.dailyResults.cupsSold).toBe(0)
+  })
+
+  describe('reputation delta formula', () => {
+    it('produces +4 to +8 delta at satisfaction=0.70 with 25 cups', () => {
+      const delta = _calculateReputationDelta(0.70, 25)
+      expect(delta).toBeGreaterThanOrEqual(4)
+      expect(delta).toBeLessThanOrEqual(8)
+    })
+
+    it('produces -4 to -8 delta at satisfaction=0.30 with 25 cups', () => {
+      const delta = _calculateReputationDelta(0.30, 25)
+      expect(delta).toBeGreaterThanOrEqual(-8)
+      expect(delta).toBeLessThanOrEqual(-4)
+    })
+
+    it('produces near-zero delta at satisfaction=0.50', () => {
+      const delta = _calculateReputationDelta(0.50, 25)
+      expect(Math.abs(delta)).toBeLessThanOrEqual(1)
+    })
+
+    it('returns -1 when no cups sold', () => {
+      const delta = _calculateReputationDelta(0, 0)
+      expect(delta).toBe(-1)
+    })
+  })
+
+  describe('WTP reputation modifier', () => {
+    it('increases effective WTP by ~6% at reputation=70', () => {
+      const baseWtp = 2.0
+      const effective = _effectiveWtp(baseWtp, 70)
+      const modifier = effective / baseWtp - 1
+      expect(modifier).toBeCloseTo(0.06, 2)
+    })
+
+    it('decreases effective WTP by ~6% at reputation=30', () => {
+      const baseWtp = 2.0
+      const effective = _effectiveWtp(baseWtp, 30)
+      const modifier = effective / baseWtp - 1
+      expect(modifier).toBeCloseTo(-0.06, 2)
+    })
+
+    it('leaves WTP unchanged at reputation=50', () => {
+      const baseWtp = 2.0
+      const effective = _effectiveWtp(baseWtp, 50)
+      expect(effective).toBe(baseWtp)
+    })
+
+    it('caps the modifier at ±15%', () => {
+      const baseWtp = 2.0
+      expect(_effectiveWtp(baseWtp, 100)).toBeLessThanOrEqual(baseWtp * 1.15)
+      expect(_effectiveWtp(baseWtp, 0)).toBeGreaterThanOrEqual(baseWtp * 0.85)
+    })
+  })
+
+  describe('updated scoring weights', () => {
+    it('uses 0.25 reputation weight in singleplayer calculateStandScore', () => {
+      // With price at 0 (perfect price score=1), perfect recipe (fit=1), rep=100
+      // score = 1*wPrice + 1*wRecipe + 1*wRep = wPrice + wRecipe + wRep = 1.0
+      const perfectScore = calculateStandScore(
+        { willingnessToPay: 2, recipe: { lemons: 2, sugar: 2, ice: 4 }, price: 0, reputation: 100 },
+        'hot',
+      )
+      // With rep=0, score = wPrice + wRecipe + 0 = 1 - wRep
+      const zeroRepScore = calculateStandScore(
+        { willingnessToPay: 2, recipe: { lemons: 2, sugar: 2, ice: 4 }, price: 0, reputation: 0 },
+        'hot',
+      )
+      const repWeight = perfectScore - zeroRepScore
+      expect(repWeight).toBeCloseTo(0.25, 2)
+    })
   })
 })
 
