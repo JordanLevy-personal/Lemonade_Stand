@@ -34,6 +34,12 @@ import type {
   Weather,
 } from './client/protocol'
 import { openRoomConnection, type RoomConnection, type RoomConnectionHandlers } from './client/socket'
+import {
+  DEFAULT_MULTIPLAYER_PLAYER_COUNT,
+  SINGLEPLAYER_TARGET_COUNT,
+  SUPPORTED_MULTIPLAYER_PLAYER_COUNTS,
+  validateTargetPlayerCount,
+} from './shared/room-player-count'
 
 export const ROOM_SESSION_KEY = 'lemonade-stand-room-session-v1'
 export const ANALYTICS_PLAYER_ID_KEY = 'lemonade-stand-analytics-player-id-v1'
@@ -198,6 +204,7 @@ interface LobbyForm {
   name: string
   roomId: string
   factionId: string
+  targetPlayerCount: number
   runLengthDays: RunLengthDays
 }
 
@@ -281,7 +288,7 @@ function finalOutcomeCopy(room: RoomState): string {
   if (!room.isGameComplete) {
     return room.targetPlayerCount === 1
       ? 'Review your stand results, then continue when you are ready.'
-      : 'Compare both stands, then request the next day when everyone is ready to keep playing.'
+      : 'Compare all stands, then request the next day when everyone is ready to keep playing.'
   }
 
   if (room.targetPlayerCount === 1) {
@@ -427,7 +434,7 @@ function findCurrentPlayer(room: RoomState | null, playerId: string | null) {
 
 function weatherLabel(room: RoomState | null): string {
   if (room?.weather === null || room?.weather === undefined) {
-    return 'Waiting for both players'
+    return 'Waiting for all players'
   }
 
   return defaultBalanceConfig.weatherProfiles[room.weather].label
@@ -465,6 +472,32 @@ function currentElapsedMsWithSpeed(
 
   const playbackFactor = simulationSpeed
   return clamp((nowMs - simulationStartAtMs) * playbackFactor, 0, room.simulation.durationMs)
+}
+
+function pluralize(count: number, singular: string): string {
+  return `${count} ${singular}${count === 1 ? '' : 's'}`
+}
+
+function openSeatCount(room: Pick<RoomState, 'players' | 'targetPlayerCount'>): number {
+  return Math.max(0, room.targetPlayerCount - room.players.length)
+}
+
+function readyPlayerCount(room: Pick<RoomState, 'players'>): number {
+  return room.players.filter((player) => player.hasSubmittedPlan).length
+}
+
+export function standAnchorPercents(playerCount: number): number[] {
+  if (playerCount <= 1) {
+    return [50]
+  }
+
+  const edgePadding = playerCount <= 3 ? 18 : 10
+  const usableWidth = 100 - edgePadding * 2
+  const step = usableWidth / Math.max(1, playerCount - 1)
+
+  return Array.from({ length: playerCount }, (_, index) =>
+    roundToPrecision(edgePadding + step * index, 2),
+  )
 }
 
 function interpolate(start: number, end: number, progress: number): number {
@@ -632,7 +665,7 @@ function activeSimulationWeather(room: RoomState): Weather {
 
 function weatherLabelFor(weather: Weather | null | undefined): string {
   if (weather === null || weather === undefined) {
-    return 'Waiting for both players'
+    return 'Waiting for all players'
   }
 
   return defaultBalanceConfig.weatherProfiles[weather].label
@@ -701,18 +734,16 @@ function timeOfDayLabel(timeOfDay: SceneTimeOfDay): string {
 }
 
 function standXPercent(room: RoomState, playerId: string): number {
-  if (room.targetPlayerCount === 1) {
-    return 50
-  }
-
   const visiblePlayers = room.players
   const playerIndex = visiblePlayers.findIndex((player) => player.id === playerId)
-  return playerIndex <= 0 ? 18 : 82
+  const anchors = standAnchorPercents(visiblePlayers.length)
+  return anchors[playerIndex] ?? anchors[0] ?? 50
 }
 
 function stopXPercent(event: CustomerEvent, room: RoomState, playerId: string, stopIndex: number): number {
   const standCenter = standXPercent(room, playerId)
-  const standHalfWidth = room.targetPlayerCount === 1 ? 8 : 6
+  const playerCount = room.targetPlayerCount === 1 ? 1 : room.players.length
+  const standHalfWidth = playerCount === 1 ? 8 : playerCount > 2 ? 4.5 : 6
   const spreadSeed = Math.sin((event.customerIndex + 1) * 12.9898 + (stopIndex + 1) * 78.233)
   const normalizedSpread = Math.max(-1, Math.min(1, spreadSeed))
 
@@ -791,7 +822,6 @@ function buildSceneStyle(event: CustomerEvent, elapsedMs: number, room: RoomStat
       }
     }
   }
-
   return {
     left: `${xPercent}%`,
     bottom: `${yPercent}%`,
@@ -1677,6 +1707,20 @@ function LobbyScreen({
               </select>
             </label>
             <label className="field">
+              <span className="field-label">Players in Room</span>
+              <select
+                className="field-input"
+                value={form.targetPlayerCount}
+                onChange={(event) => onChange({ targetPlayerCount: numberValue(event.target.value) })}
+              >
+                {SUPPORTED_MULTIPLAYER_PLAYER_COUNTS.map((playerCount) => (
+                  <option key={playerCount} value={playerCount}>
+                    {pluralize(playerCount, 'player')}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="field">
               <span className="field-label">Run Length</span>
               <select
                 className="field-input"
@@ -1736,21 +1780,46 @@ function LobbyScreen({
 function WaitingScreen({
   roomId,
   gameMode,
+  room,
 }: {
   roomId: string
   gameMode: GameMode
+  room: RoomState | null
 }): JSX.Element {
+  const seatsOpen = room === null ? null : openSeatCount(room)
+  const waitingCopy =
+    gameMode === 'singleplayer'
+      ? 'Loading your solo market run.'
+      : room === null
+        ? `Share your client URL and have players join room ${roomId}.`
+        : seatsOpen === 0
+          ? `Share your client URL and have them join room ${roomId}. All ${room.targetPlayerCount} players are here and the room is almost ready.`
+          : `Share your client URL with ${pluralize(seatsOpen ?? 0, 'more player')} and have them join room ${roomId}.`
+
   return (
     <section className="app-stage">
       <div className="panel hero-panel">
         <p className="eyebrow">{gameMode === 'singleplayer' ? 'Solo game created' : 'Room created'}</p>
         <h1>{roomId}</h1>
-        <p className="muted">
-          {gameMode === 'singleplayer'
-            ? 'Loading your solo market run.'
-            : `Share your client URL with the second player and have them join room ${roomId}.`}
-        </p>
+        <p className="muted">{waitingCopy}</p>
       </div>
+      {room !== null ? (
+        <section className="panel">
+          <p className="eyebrow">Joined So Far</p>
+          <div className="summary-chip-row">
+            {room.players.map((player) => (
+              <span className="summary-chip" key={player.id}>
+                {player.name}
+              </span>
+            ))}
+            {seatsOpen !== null && seatsOpen > 0 ? (
+              <span className="summary-chip summary-chip-open-seat">
+                {pluralize(seatsOpen, 'seat')} open
+              </span>
+            ) : null}
+          </div>
+        </section>
+      ) : null}
     </section>
   )
 }
@@ -1783,6 +1852,7 @@ function PlanningScreen({
   const margin = roundToPrecision(localPlan.price - cupCost, 2)
   const perIngredientCups = calculatePerIngredientCapacity(projectedInventory, localPlan.recipe)
   const bottleneckCups = Math.min(perIngredientCups.lemons, perIngredientCups.sugar, perIngredientCups.ice)
+  const remainingReadyPlayers = Math.max(0, room.targetPlayerCount - readyPlayerCount(room))
 
   return (
     <section className="app-stage">
@@ -1793,7 +1863,7 @@ function PlanningScreen({
           Forecast: <strong>{weatherLabel(room)}</strong>.{' '}
           {room.targetPlayerCount === 1
             ? 'Lock in your plan to start the day.'
-            : 'Plans stay private until both stands lock in.'}
+            : `Plans stay private until all ${room.targetPlayerCount} players lock in.`}
         </p>
       </div>
 
@@ -1953,10 +2023,12 @@ function PlanningScreen({
               {currentPlayer.hasSubmittedPlan
                 ? room.targetPlayerCount === 1
                   ? 'Plan locked. Starting the day...'
-                  : 'Plan locked. Waiting on the other stand.'
+                  : remainingReadyPlayers === 0
+                    ? 'Plan locked. Starting the day...'
+                    : `Plan locked. Waiting on ${pluralize(remainingReadyPlayers, 'more player')}.`
                 : room.targetPlayerCount === 1
                   ? 'You are the only stand today.'
-                  : 'Your choices stay private until both players are ready.'}
+                  : `Your choices stay private until all ${room.targetPlayerCount} players are ready.`}
             </p>
           </div>
           {error !== null ? <p className="error-text">{error}</p> : null}
@@ -2001,6 +2073,7 @@ function SimulationScreen({
   )
   const liveInventory = inventoryForSimulation(currentPlayer, simulation.customerEvents, elapsedMs)
   const visiblePlayers = room.targetPlayerCount === 1 ? room.players.slice(0, 1) : room.players
+  const compactStands = visiblePlayers.length > 2
   const hasHintUpgrade = isRecipeFeedbackHintUpgradeOwned(currentPlayer)
   const progress = simulationProgress(elapsedMs, simulation.durationMs)
   const businessClock = formatBusinessClock(progress)
@@ -2019,7 +2092,7 @@ function SimulationScreen({
         <p className="muted">
           {room.targetPlayerCount === 1
             ? 'Your customer wave is live.'
-            : 'Shared timeline live. The same customer wave is playing on every connected laptop.'}
+            : 'Shared timeline live. The same customer wave is playing on every connected screen.'}
         </p>
         <div className="summary-chip-row">
           <span className="summary-chip">{weatherName} forecast</span>
@@ -2132,14 +2205,9 @@ function SimulationScreen({
           <div className="crowd-road" aria-hidden="true" />
           {visiblePlayers.map((player, index) => (
             <div
-              className={
-                visiblePlayers.length === 1
-                  ? 'stand-column stand-column-solo'
-                  : index === 0
-                    ? 'stand-column stand-column-left'
-                    : 'stand-column stand-column-right'
-              }
+              className={`stand-column${compactStands ? ' stand-column-compact' : ''}${visiblePlayers.length === 1 ? ' stand-column-solo' : ''}`}
               key={player.id}
+              style={{ left: `${standAnchorPercents(visiblePlayers.length)[index] ?? 50}%` }}
             >
               <p className="stand-name">{player.name}</p>
               {isPlayerSoldOutDuringSimulation(player, simulation.customerEvents, elapsedMs) ? (
@@ -2393,6 +2461,10 @@ function ResultsScreen({
   const hasRequestedNextDay =
     currentPlayerId !== null && room.requestedNextDayPlayerIds.includes(currentPlayerId)
   const isSingleplayerRoom = room.targetPlayerCount === 1
+  const remainingNextDayRequests = Math.max(
+    0,
+    room.targetPlayerCount - room.requestedNextDayPlayerIds.length,
+  )
   const chartPlayers = room.players as ChartPlayer[]
   const [chartLayout, setChartLayout] = useState<ResultsChartLayoutState>(() =>
     readStoredResultsChartLayout(chartPlayers, currentPlayerId),
@@ -2560,7 +2632,9 @@ function ResultsScreen({
             {hasRequestedNextDay
               ? isSingleplayerRoom
                 ? 'Loading the next day...'
-                : 'Next day requested. Waiting on the other stand.'
+                : remainingNextDayRequests === 0
+                  ? 'Loading the next day...'
+                  : `Next day requested. Waiting on ${pluralize(remainingNextDayRequests, 'more player')}.`
               : isSingleplayerRoom
                 ? 'Start the next day when you are ready.'
                 : 'Request the next day when you are ready to keep playing.'}
@@ -2593,6 +2667,7 @@ function App(): JSX.Element {
     name: reconnectSession?.name ?? searchParam('name') ?? '',
     roomId: reconnectSession?.roomId ?? searchParam('roomId') ?? '',
     factionId: reconnectSession?.factionId ?? searchParam('faction') ?? DEFAULT_HOST_FACTION,
+    targetPlayerCount: DEFAULT_MULTIPLAYER_PLAYER_COUNT,
     runLengthDays: 14,
   })
   const [session, setSession] = useState<StoredRoomSession | null>(null)
@@ -2758,12 +2833,21 @@ function App(): JSX.Element {
       return
     }
 
+    let validatedTargetPlayerCount: number
+
+    try {
+      validatedTargetPlayerCount = validateTargetPlayerCount(gameMode, targetPlayerCount)
+    } catch (validationError) {
+      setError(validationError instanceof Error ? validationError.message : 'Unsupported room size.')
+      return
+    }
+
     connectAndSend(
       {
         type: 'create_room',
         name: lobbyForm.name,
         gameMode,
-        targetPlayerCount,
+        targetPlayerCount: validatedTargetPlayerCount,
         runLengthDays: lobbyForm.runLengthDays,
         faction: factionDefinition(lobbyForm.factionId),
         analyticsPlayerId: analyticsPlayerIdRef.current,
@@ -2777,11 +2861,11 @@ function App(): JSX.Element {
   }
 
   function hostRoom(): void {
-    startGame('multiplayer', 2)
+    startGame('multiplayer', lobbyForm.targetPlayerCount)
   }
 
   function playSinglePlayer(): void {
-    startGame('singleplayer', 1)
+    startGame('singleplayer', SINGLEPLAYER_TARGET_COUNT)
   }
 
   function joinRoomFlow(playerId?: string, factionId = DEFAULT_JOIN_FACTION): void {
@@ -2904,6 +2988,7 @@ function App(): JSX.Element {
         <WaitingScreen
           roomId={room?.roomId ?? session.roomId}
           gameMode={pendingGameMode}
+          room={room}
         />
       ) : null}
       {room === null ? (
