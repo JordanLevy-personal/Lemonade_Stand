@@ -34,9 +34,16 @@ import type {
   Weather,
 } from './client/protocol'
 import { openRoomConnection, type RoomConnection, type RoomConnectionHandlers } from './client/socket'
+import {
+  DEFAULT_MULTIPLAYER_PLAYER_COUNT,
+  SINGLEPLAYER_TARGET_COUNT,
+  SUPPORTED_MULTIPLAYER_PLAYER_COUNTS,
+  validateTargetPlayerCount,
+} from './shared/room-player-count'
 
 export const ROOM_SESSION_KEY = 'lemonade-stand-room-session-v1'
 export const ANALYTICS_PLAYER_ID_KEY = 'lemonade-stand-analytics-player-id-v1'
+export const RESULTS_CHART_LAYOUT_KEY = 'lemonade-stand-results-chart-layout-v1'
 
 const DEFAULT_HOST_FACTION = 'sun-guild'
 const DEFAULT_JOIN_FACTION = 'market-tide'
@@ -57,7 +64,8 @@ const SHOW_DEV_CONTROLS = import.meta.env.DEV || import.meta.env.MODE === 'test'
 const PERFORMANCE_CHART_PALETTE = ['#f3b63f', '#2a8da8', '#ef6f51', '#6b62c5'] as const
 
 type ResultsChartMetric = 'revenue' | 'profit' | 'money' | 'reputation' | 'satisfaction'
-type ResultsChartMode = ResultsChartMetric | 'revenue-profit'
+type ResultsPerformanceChartId = ResultsChartMetric | 'revenue-profit'
+type ResultsChartId = ResultsPerformanceChartId | 'recipe'
 type RecipeFeedbackHintDirection = 'more' | 'less'
 type RecipeFeedbackHintIngredient = keyof Recipe
 
@@ -105,6 +113,14 @@ interface ChartSeries {
   label: string
   stroke: string
   dash?: string
+}
+
+interface ResultsChartLayoutState {
+  mainChartId: ResultsChartId
+  splitChartIds: ResultsChartId[]
+  recipe: {
+    selectedPlayerId: string | null
+  }
 }
 type SceneTimeOfDay = 'morning' | 'midday' | 'afternoon' | 'dusk'
 type HslColor = [number, number, number]
@@ -160,6 +176,18 @@ const RAIN_DROP_LAYOUT: readonly RainDropLayout[] = [
   { left: 75, delay: 0.64, duration: 0.93, length: 1.76, drift: -0.12, opacity: 0.59 },
 ] as const
 
+const PERFORMANCE_CHART_IDS = [
+  'revenue',
+  'profit',
+  'revenue-profit',
+  'money',
+  'reputation',
+  'satisfaction',
+] as const satisfies readonly ResultsPerformanceChartId[]
+const RESULTS_CHART_IDS = [...PERFORMANCE_CHART_IDS, 'recipe'] as const satisfies readonly ResultsChartId[]
+const DEFAULT_RESULTS_CHART_ID: ResultsChartId = 'revenue'
+const RESULTS_CHART_LAYOUT_VERSION = 1
+
 interface StoredRoomSession {
   roomId: string
   playerId: string
@@ -178,6 +206,7 @@ interface LobbyForm {
   name: string
   roomId: string
   factionId: string
+  targetPlayerCount: number
   runLengthDays: RunLengthDays
 }
 
@@ -261,7 +290,7 @@ function finalOutcomeCopy(room: RoomState): string {
   if (!room.isGameComplete) {
     return room.targetPlayerCount === 1
       ? 'Review your stand results, then continue when you are ready.'
-      : 'Compare both stands, then request the next day when everyone is ready to keep playing.'
+      : 'Compare all stands, then request the next day when everyone is ready to keep playing.'
   }
 
   if (room.targetPlayerCount === 1) {
@@ -407,7 +436,7 @@ function findCurrentPlayer(room: RoomState | null, playerId: string | null) {
 
 function weatherLabel(room: RoomState | null): string {
   if (room?.weather === null || room?.weather === undefined) {
-    return 'Waiting for both players'
+    return 'Waiting for all players'
   }
 
   return defaultBalanceConfig.weatherProfiles[room.weather].label
@@ -445,6 +474,32 @@ function currentElapsedMsWithSpeed(
 
   const playbackFactor = simulationSpeed
   return clamp((nowMs - simulationStartAtMs) * playbackFactor, 0, room.simulation.durationMs)
+}
+
+function pluralize(count: number, singular: string): string {
+  return `${count} ${singular}${count === 1 ? '' : 's'}`
+}
+
+function openSeatCount(room: Pick<RoomState, 'players' | 'targetPlayerCount'>): number {
+  return Math.max(0, room.targetPlayerCount - room.players.length)
+}
+
+function readyPlayerCount(room: Pick<RoomState, 'players'>): number {
+  return room.players.filter((player) => player.hasSubmittedPlan).length
+}
+
+export function standAnchorPercents(playerCount: number): number[] {
+  if (playerCount <= 1) {
+    return [50]
+  }
+
+  const edgePadding = playerCount <= 3 ? 18 : 10
+  const usableWidth = 100 - edgePadding * 2
+  const step = usableWidth / Math.max(1, playerCount - 1)
+
+  return Array.from({ length: playerCount }, (_, index) =>
+    roundToPrecision(edgePadding + step * index, 2),
+  )
 }
 
 function interpolate(start: number, end: number, progress: number): number {
@@ -612,7 +667,7 @@ function activeSimulationWeather(room: RoomState): Weather {
 
 function weatherLabelFor(weather: Weather | null | undefined): string {
   if (weather === null || weather === undefined) {
-    return 'Waiting for both players'
+    return 'Waiting for all players'
   }
 
   return defaultBalanceConfig.weatherProfiles[weather].label
@@ -681,18 +736,16 @@ function timeOfDayLabel(timeOfDay: SceneTimeOfDay): string {
 }
 
 function standXPercent(room: RoomState, playerId: string): number {
-  if (room.targetPlayerCount === 1) {
-    return 50
-  }
-
   const visiblePlayers = room.players
   const playerIndex = visiblePlayers.findIndex((player) => player.id === playerId)
-  return playerIndex <= 0 ? 18 : 82
+  const anchors = standAnchorPercents(visiblePlayers.length)
+  return anchors[playerIndex] ?? anchors[0] ?? 50
 }
 
 function stopXPercent(event: CustomerEvent, room: RoomState, playerId: string, stopIndex: number): number {
   const standCenter = standXPercent(room, playerId)
-  const standHalfWidth = room.targetPlayerCount === 1 ? 8 : 6
+  const playerCount = room.targetPlayerCount === 1 ? 1 : room.players.length
+  const standHalfWidth = playerCount === 1 ? 8 : playerCount > 2 ? 4.5 : 6
   const spreadSeed = Math.sin((event.customerIndex + 1) * 12.9898 + (stopIndex + 1) * 78.233)
   const normalizedSpread = Math.max(-1, Math.min(1, spreadSeed))
 
@@ -771,7 +824,6 @@ function buildSceneStyle(event: CustomerEvent, elapsedMs: number, room: RoomStat
       }
     }
   }
-
   return {
     left: `${xPercent}%`,
     bottom: `${yPercent}%`,
@@ -978,7 +1030,213 @@ function summarizeFeedbackForPlayer({
   }
 }
 
-function chartTitle(metric: ResultsChartMode): string {
+function isResultsChartId(value: unknown): value is ResultsChartId {
+  return typeof value === 'string' && RESULTS_CHART_IDS.includes(value as ResultsChartId)
+}
+
+function isPerformanceChartId(chartId: ResultsChartId): chartId is ResultsPerformanceChartId {
+  return chartId !== 'recipe'
+}
+
+function defaultRecipePlayerId(chartPlayers: ChartPlayer[], currentPlayerId: string | null): string | null {
+  if (currentPlayerId !== null && chartPlayers.some((player) => player.id === currentPlayerId)) {
+    return currentPlayerId
+  }
+
+  return chartPlayers[0]?.id ?? null
+}
+
+function availableResultsChartIds(splitChartIds: ResultsChartId[]): ResultsChartId[] {
+  return RESULTS_CHART_IDS.filter((chartId) => !splitChartIds.includes(chartId))
+}
+
+function defaultMainChartId(splitChartIds: ResultsChartId[]): ResultsChartId {
+  return availableResultsChartIds(splitChartIds)[0] ?? DEFAULT_RESULTS_CHART_ID
+}
+
+function readStoredResultsChartLayout(
+  chartPlayers: ChartPlayer[],
+  currentPlayerId: string | null,
+): ResultsChartLayoutState {
+  const stored = window.localStorage.getItem(RESULTS_CHART_LAYOUT_KEY)
+
+  if (stored === null) {
+    return {
+      mainChartId: DEFAULT_RESULTS_CHART_ID,
+      splitChartIds: [],
+      recipe: {
+        selectedPlayerId: defaultRecipePlayerId(chartPlayers, currentPlayerId),
+      },
+    }
+  }
+
+  try {
+    return sanitizeResultsChartLayout(JSON.parse(stored), chartPlayers, currentPlayerId)
+  } catch {
+    return {
+      mainChartId: DEFAULT_RESULTS_CHART_ID,
+      splitChartIds: [],
+      recipe: {
+        selectedPlayerId: defaultRecipePlayerId(chartPlayers, currentPlayerId),
+      },
+    }
+  }
+}
+
+function writeStoredResultsChartLayout(layout: ResultsChartLayoutState): void {
+  window.localStorage.setItem(
+    RESULTS_CHART_LAYOUT_KEY,
+    JSON.stringify({
+      version: RESULTS_CHART_LAYOUT_VERSION,
+      mainChartId: layout.mainChartId,
+      splitChartIds: layout.splitChartIds,
+      recipe: {
+        selectedPlayerId: layout.recipe.selectedPlayerId,
+      },
+    }),
+  )
+}
+
+function sanitizeSplitChartIds(value: unknown): ResultsChartId[] {
+  if (!Array.isArray(value)) {
+    return []
+  }
+
+  const splitChartIds: ResultsChartId[] = []
+
+  value.forEach((candidate) => {
+    if (!isResultsChartId(candidate) || splitChartIds.includes(candidate)) {
+      return
+    }
+
+    splitChartIds.push(candidate)
+  })
+
+  return splitChartIds.slice(0, RESULTS_CHART_IDS.length - 1)
+}
+
+function sanitizeRecipePlayerSelection(
+  value: unknown,
+  chartPlayers: ChartPlayer[],
+  currentPlayerId: string | null,
+): string | null {
+  if (typeof value === 'string' && chartPlayers.some((player) => player.id === value)) {
+    return value
+  }
+
+  return defaultRecipePlayerId(chartPlayers, currentPlayerId)
+}
+
+function sanitizeResultsChartLayout(
+  value: unknown,
+  chartPlayers: ChartPlayer[],
+  currentPlayerId: string | null,
+): ResultsChartLayoutState {
+  const defaultLayout: ResultsChartLayoutState = {
+    mainChartId: DEFAULT_RESULTS_CHART_ID,
+    splitChartIds: [],
+    recipe: {
+      selectedPlayerId: defaultRecipePlayerId(chartPlayers, currentPlayerId),
+    },
+  }
+
+  if (typeof value !== 'object' || value === null) {
+    return defaultLayout
+  }
+
+  const parsedValue = value as {
+    version?: unknown
+    mainChartId?: unknown
+    splitChartIds?: unknown
+    recipe?: {
+      selectedPlayerId?: unknown
+    } | null
+  }
+
+  if (parsedValue.version !== RESULTS_CHART_LAYOUT_VERSION) {
+    return defaultLayout
+  }
+
+  const requestedSplitChartIds = sanitizeSplitChartIds(parsedValue.splitChartIds)
+  const mainChartId =
+    isResultsChartId(parsedValue.mainChartId) && !requestedSplitChartIds.includes(parsedValue.mainChartId)
+      ? parsedValue.mainChartId
+      : defaultMainChartId(requestedSplitChartIds)
+
+  return {
+    mainChartId,
+    splitChartIds: requestedSplitChartIds.filter((chartId) => chartId !== mainChartId),
+    recipe: {
+      selectedPlayerId: sanitizeRecipePlayerSelection(
+        parsedValue.recipe?.selectedPlayerId,
+        chartPlayers,
+        currentPlayerId,
+      ),
+    },
+  }
+}
+
+function splitResultsChartLayout(layout: ResultsChartLayoutState): ResultsChartLayoutState {
+  const availableChartIds = availableResultsChartIds(layout.splitChartIds)
+
+  if (availableChartIds.length <= 1 || layout.splitChartIds.includes(layout.mainChartId)) {
+    return layout
+  }
+
+  const splitChartIds = [...layout.splitChartIds, layout.mainChartId]
+
+  return {
+    ...layout,
+    mainChartId: defaultMainChartId(splitChartIds),
+    splitChartIds,
+  }
+}
+
+function recombineResultsChartLayout(
+  layout: ResultsChartLayoutState,
+  chartId: ResultsChartId,
+): ResultsChartLayoutState {
+  if (!layout.splitChartIds.includes(chartId)) {
+    return layout
+  }
+
+  return {
+    ...layout,
+    splitChartIds: layout.splitChartIds.filter((splitChartId) => splitChartId !== chartId),
+  }
+}
+
+function selectMainResultsChart(
+  layout: ResultsChartLayoutState,
+  chartId: ResultsChartId,
+): ResultsChartLayoutState {
+  if (layout.splitChartIds.includes(chartId)) {
+    return layout
+  }
+
+  return {
+    ...layout,
+    mainChartId: chartId,
+  }
+}
+
+function selectRecipeChartPlayer(
+  layout: ResultsChartLayoutState,
+  playerId: string,
+): ResultsChartLayoutState {
+  return {
+    ...layout,
+    recipe: {
+      selectedPlayerId: playerId,
+    },
+  }
+}
+
+function chartTitle(metric: ResultsChartId, selectedRecipePlayer: ChartPlayer | null): string {
+  if (metric === 'recipe') {
+    return selectedRecipePlayer === null ? 'No Recipe History Yet' : `Recipe over time: ${selectedRecipePlayer.name}`
+  }
+
   if (metric === 'revenue-profit') {
     return 'Revenue and Profit Over Time'
   }
@@ -1001,7 +1259,11 @@ function chartTitle(metric: ResultsChartMode): string {
   return 'Revenue Over Time'
 }
 
-function chartMetricLabel(metric: ResultsChartMode): string {
+function chartMetricLabel(metric: ResultsChartId): string {
+  if (metric === 'recipe') {
+    return 'Recipe'
+  }
+
   if (metric === 'revenue-profit') {
     return 'Revenue + Profit'
   }
@@ -1064,7 +1326,7 @@ function buildChartPlayers(players: RoomState['players']): ChartPlayer[] {
   }))
 }
 
-function buildPerformanceChartSeries(players: ChartPlayer[], mode: ResultsChartMode): ChartSeries[] {
+function buildPerformanceChartSeries(players: ChartPlayer[], mode: ResultsPerformanceChartId): ChartSeries[] {
   if (mode === 'revenue-profit') {
     return players.flatMap((player) => [
       {
@@ -1088,7 +1350,7 @@ function buildPerformanceChartSeries(players: ChartPlayer[], mode: ResultsChartM
   }))
 }
 
-function buildPerformanceChartData(players: ChartPlayer[], mode: ResultsChartMode): ChartRow[] {
+function buildPerformanceChartData(players: ChartPlayer[], mode: ResultsPerformanceChartId): ChartRow[] {
   const days = new Set<number>()
   players.forEach((player) => {
     player.history.forEach((entry) => {
@@ -1129,6 +1391,13 @@ function buildRecipeChartData(player: ChartPlayer): ChartRow[] {
 
 function recipeChartHasData(player: ChartPlayer | null): boolean {
   return player !== null && player.history.some((entry) => entry.recipeSnapshot !== undefined)
+}
+
+function selectedRecipeChartPlayer(
+  chartPlayers: ChartPlayer[],
+  selectedRecipePlayerId: string | null,
+): ChartPlayer | null {
+  return chartPlayers.find((player) => player.id === selectedRecipePlayerId) ?? chartPlayers[0] ?? null
 }
 
 function buildPlan(currentPlayer: ReturnType<typeof findCurrentPlayer>): DailyPlan {
@@ -1452,6 +1721,20 @@ function LobbyScreen({
               </select>
             </label>
             <label className="field">
+              <span className="field-label">Players in Room</span>
+              <select
+                className="field-input"
+                value={form.targetPlayerCount}
+                onChange={(event) => onChange({ targetPlayerCount: numberValue(event.target.value) })}
+              >
+                {SUPPORTED_MULTIPLAYER_PLAYER_COUNTS.map((playerCount) => (
+                  <option key={playerCount} value={playerCount}>
+                    {pluralize(playerCount, 'player')}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="field">
               <span className="field-label">Run Length</span>
               <select
                 className="field-input"
@@ -1511,21 +1794,46 @@ function LobbyScreen({
 function WaitingScreen({
   roomId,
   gameMode,
+  room,
 }: {
   roomId: string
   gameMode: GameMode
+  room: RoomState | null
 }): JSX.Element {
+  const seatsOpen = room === null ? null : openSeatCount(room)
+  const waitingCopy =
+    gameMode === 'singleplayer'
+      ? 'Loading your solo market run.'
+      : room === null
+        ? `Share your client URL and have players join room ${roomId}.`
+        : seatsOpen === 0
+          ? `Share your client URL and have them join room ${roomId}. All ${room.targetPlayerCount} players are here and the room is almost ready.`
+          : `Share your client URL with ${pluralize(seatsOpen ?? 0, 'more player')} and have them join room ${roomId}.`
+
   return (
     <section className="app-stage">
       <div className="panel hero-panel">
         <p className="eyebrow">{gameMode === 'singleplayer' ? 'Solo game created' : 'Room created'}</p>
         <h1>{roomId}</h1>
-        <p className="muted">
-          {gameMode === 'singleplayer'
-            ? 'Loading your solo market run.'
-            : `Share your client URL with the second player and have them join room ${roomId}.`}
-        </p>
+        <p className="muted">{waitingCopy}</p>
       </div>
+      {room !== null ? (
+        <section className="panel">
+          <p className="eyebrow">Joined So Far</p>
+          <div className="summary-chip-row">
+            {room.players.map((player) => (
+              <span className="summary-chip" key={player.id}>
+                {player.name}
+              </span>
+            ))}
+            {seatsOpen !== null && seatsOpen > 0 ? (
+              <span className="summary-chip summary-chip-open-seat">
+                {pluralize(seatsOpen, 'seat')} open
+              </span>
+            ) : null}
+          </div>
+        </section>
+      ) : null}
     </section>
   )
 }
@@ -1558,6 +1866,7 @@ function PlanningScreen({
   const margin = roundToPrecision(localPlan.price - cupCost, 2)
   const perIngredientCups = calculatePerIngredientCapacity(projectedInventory, localPlan.recipe)
   const bottleneckCups = Math.min(perIngredientCups.lemons, perIngredientCups.sugar, perIngredientCups.ice)
+  const remainingReadyPlayers = Math.max(0, room.targetPlayerCount - readyPlayerCount(room))
 
   return (
     <section className="app-stage">
@@ -1568,7 +1877,7 @@ function PlanningScreen({
           Forecast: <strong>{weatherLabel(room)}</strong>.{' '}
           {room.targetPlayerCount === 1
             ? 'Lock in your plan to start the day.'
-            : 'Plans stay private until both stands lock in.'}
+            : `Plans stay private until all ${room.targetPlayerCount} players lock in.`}
         </p>
       </div>
 
@@ -1728,10 +2037,12 @@ function PlanningScreen({
               {currentPlayer.hasSubmittedPlan
                 ? room.targetPlayerCount === 1
                   ? 'Plan locked. Starting the day...'
-                  : 'Plan locked. Waiting on the other stand.'
+                  : remainingReadyPlayers === 0
+                    ? 'Plan locked. Starting the day...'
+                    : `Plan locked. Waiting on ${pluralize(remainingReadyPlayers, 'more player')}.`
                 : room.targetPlayerCount === 1
                   ? 'You are the only stand today.'
-                  : 'Your choices stay private until both players are ready.'}
+                  : `Your choices stay private until all ${room.targetPlayerCount} players are ready.`}
             </p>
           </div>
           {error !== null ? <p className="error-text">{error}</p> : null}
@@ -1776,6 +2087,7 @@ function SimulationScreen({
   )
   const liveInventory = inventoryForSimulation(currentPlayer, simulation.customerEvents, elapsedMs)
   const visiblePlayers = room.targetPlayerCount === 1 ? room.players.slice(0, 1) : room.players
+  const compactStands = visiblePlayers.length > 2
   const hasHintUpgrade = isRecipeFeedbackHintUpgradeOwned(currentPlayer)
   const progress = simulationProgress(elapsedMs, simulation.durationMs)
   const businessClock = formatBusinessClock(progress)
@@ -1794,7 +2106,7 @@ function SimulationScreen({
         <p className="muted">
           {room.targetPlayerCount === 1
             ? 'Your customer wave is live.'
-            : 'Shared timeline live. The same customer wave is playing on every connected laptop.'}
+            : 'Shared timeline live. The same customer wave is playing on every connected screen.'}
         </p>
         <div className="summary-chip-row">
           <span className="summary-chip">{weatherName} forecast</span>
@@ -1907,14 +2219,9 @@ function SimulationScreen({
           <div className="crowd-road" aria-hidden="true" />
           {visiblePlayers.map((player, index) => (
             <div
-              className={
-                visiblePlayers.length === 1
-                  ? 'stand-column stand-column-solo'
-                  : index === 0
-                    ? 'stand-column stand-column-left'
-                    : 'stand-column stand-column-right'
-              }
+              className={`stand-column${compactStands ? ' stand-column-compact' : ''}${visiblePlayers.length === 1 ? ' stand-column-solo' : ''}`}
               key={player.id}
+              style={{ left: `${standAnchorPercents(visiblePlayers.length)[index] ?? 50}%` }}
             >
               <p className="stand-name">{player.name}</p>
               {isPlayerSoldOutDuringSimulation(player, simulation.customerEvents, elapsedMs) ? (
@@ -1967,6 +2274,202 @@ function SimulationScreen({
   )
 }
 
+function PerformanceChart({
+  chartPlayers,
+  chartId,
+}: {
+  chartPlayers: ChartPlayer[]
+  chartId: ResultsPerformanceChartId
+}): JSX.Element {
+  const performanceSeries = buildPerformanceChartSeries(chartPlayers, chartId)
+  const performanceChartData = buildPerformanceChartData(chartPlayers, chartId)
+  const hasHistory = chartPlayers.some((player) => player.history.length > 0)
+
+  if (!hasHistory) {
+    return <p className="chart-empty-state muted">Play another day to start building a trend line for this stand.</p>
+  }
+
+  return (
+    <div className="results-chart-stack">
+      <div className="summary-chip-row chart-legend-row" aria-label="Performance legend">
+        {performanceSeries.map((series) => (
+          <span className="summary-chip chart-legend-chip" key={series.dataKey}>
+            <span
+              aria-hidden="true"
+              className="chart-legend-swatch"
+              data-series-color={series.stroke}
+              data-series-dash={series.dash ?? 'solid'}
+              style={{ '--chart-series-color': series.stroke } as CSSProperties}
+            />
+            {series.label}
+          </span>
+        ))}
+      </div>
+      <div className="results-chart-shell results-chart-shell-performance">
+        <ResponsiveContainer height="100%" width="100%">
+          <LineChart data={performanceChartData} margin={{ top: 8, right: 12, bottom: 4, left: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" opacity={0.25} />
+            <XAxis allowDecimals={false} dataKey="day" />
+            <YAxis
+              allowDecimals={chartId !== 'reputation' && chartId !== 'satisfaction'}
+              tickFormatter={(value) =>
+                formatChartValue(chartId === 'revenue-profit' ? 'revenue' : chartId, Number(value))
+              }
+            />
+            <Tooltip
+              formatter={(value) => {
+                const numericValue = typeof value === 'number' ? value : Number(value)
+
+                if (value === null || value === undefined || Number.isNaN(numericValue)) {
+                  return 'No data'
+                }
+
+                return formatChartValue(chartId === 'revenue-profit' ? 'revenue' : chartId, numericValue)
+              }}
+              labelFormatter={(day) => `Day ${day}`}
+            />
+            {performanceSeries.map((series) => (
+              <Line
+                connectNulls
+                dataKey={series.dataKey}
+                dot={false}
+                key={series.dataKey}
+                name={series.label}
+                stroke={series.stroke}
+                strokeDasharray={series.dash}
+                strokeWidth={series.dash === undefined ? 3.25 : 2.75}
+                type="monotone"
+              />
+            ))}
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  )
+}
+
+function RecipeChart({
+  chartPlayers,
+  selectedRecipePlayerId,
+  onSelectRecipePlayerId,
+}: {
+  chartPlayers: ChartPlayer[]
+  selectedRecipePlayerId: string | null
+  onSelectRecipePlayerId: (playerId: string) => void
+}): JSX.Element {
+  const selectedRecipePlayer = selectedRecipeChartPlayer(chartPlayers, selectedRecipePlayerId)
+  const recipeChartData = selectedRecipePlayer === null ? [] : buildRecipeChartData(selectedRecipePlayer)
+  const hasAnyRecipeHistory = chartPlayers.some((player) => recipeChartHasData(player))
+  const hasRecipeHistory = recipeChartHasData(selectedRecipePlayer)
+
+  return (
+    <div className="results-chart-content">
+      {chartPlayers.length > 1 ? (
+        <div aria-label="Recipe history player selector" className="results-filter-row" role="group">
+          {chartPlayers.map((player) => (
+            <button
+              aria-pressed={player.id === selectedRecipePlayerId}
+              className={player.id === selectedRecipePlayerId ? 'filter-chip filter-chip-active' : 'filter-chip'}
+              key={player.id}
+              onClick={() => onSelectRecipePlayerId(player.id)}
+              type="button"
+            >
+              {player.name}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      {hasRecipeHistory && selectedRecipePlayer !== null ? (
+        <div className="results-chart-stack">
+          <div className="summary-chip-row chart-legend-row" aria-label="Recipe legend">
+            <span className="summary-chip">Lemons</span>
+            <span className="summary-chip">Sugar</span>
+            <span className="summary-chip">Ice</span>
+          </div>
+          <div className="results-chart-shell results-chart-shell-recipe">
+            <ResponsiveContainer height="100%" width="100%">
+              <LineChart data={recipeChartData} margin={{ top: 8, right: 12, bottom: 4, left: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" opacity={0.25} />
+                <XAxis allowDecimals={false} dataKey="day" />
+                <YAxis allowDecimals tickFormatter={(value) => `${value}`} />
+                <Tooltip
+                  formatter={(value, name) => {
+                    const numericValue = typeof value === 'number' ? value : Number(value)
+
+                    if (value === null || value === undefined || Number.isNaN(numericValue)) {
+                      return 'No data'
+                    }
+
+                    return [numericValue, typeof name === 'string' ? name : '']
+                  }}
+                  labelFormatter={(day) => `Day ${day}`}
+                />
+                <Line
+                  connectNulls
+                  dataKey="lemons"
+                  dot={false}
+                  name="Lemons"
+                  stroke="#f3b63f"
+                  strokeWidth={3}
+                  type="monotone"
+                />
+                <Line
+                  connectNulls
+                  dataKey="sugar"
+                  dot={false}
+                  name="Sugar"
+                  stroke="#2a8da8"
+                  strokeWidth={3}
+                  type="monotone"
+                />
+                <Line
+                  connectNulls
+                  dataKey="ice"
+                  dot={false}
+                  name="Ice"
+                  stroke="#4b8e8d"
+                  strokeWidth={3}
+                  type="monotone"
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      ) : (
+        <p className="chart-empty-state muted">
+          {hasAnyRecipeHistory
+            ? `No recipe snapshots are available for ${selectedRecipePlayer?.name ?? 'the selected player'} yet.`
+            : 'Play another day to start tracking recipe trends.'}
+        </p>
+      )}
+    </div>
+  )
+}
+
+function ResultsChartPanel({
+  chartId,
+  chartPlayers,
+  selectedRecipePlayerId,
+  onSelectRecipePlayerId,
+}: {
+  chartId: ResultsChartId
+  chartPlayers: ChartPlayer[]
+  selectedRecipePlayerId: string | null
+  onSelectRecipePlayerId: (playerId: string) => void
+}): JSX.Element {
+  if (isPerformanceChartId(chartId)) {
+    return <PerformanceChart chartId={chartId} chartPlayers={chartPlayers} />
+  }
+
+  return (
+    <RecipeChart
+      chartPlayers={chartPlayers}
+      onSelectRecipePlayerId={onSelectRecipePlayerId}
+      selectedRecipePlayerId={selectedRecipePlayerId}
+    />
+  )
+}
+
 function ResultsScreen({
   room,
   currentPlayerId,
@@ -1979,34 +2482,39 @@ function ResultsScreen({
   const hasRequestedNextDay =
     currentPlayerId !== null && room.requestedNextDayPlayerIds.includes(currentPlayerId)
   const isSingleplayerRoom = room.targetPlayerCount === 1
-  const chartPlayers = buildChartPlayers(room.players)
-  const [selectedMetric, setSelectedMetric] = useState<ResultsChartMode>('revenue')
-  const [selectedRecipePlayerId, setSelectedRecipePlayerId] = useState<string | null>(
-    () => currentPlayerId ?? chartPlayers[0]?.id ?? null,
+  const remainingNextDayRequests = Math.max(
+    0,
+    room.targetPlayerCount - room.requestedNextDayPlayerIds.length,
   )
-  const selectedRecipePlayer =
-    chartPlayers.find((player) => player.id === selectedRecipePlayerId) ?? chartPlayers[0] ?? null
-  const performanceSeries = buildPerformanceChartSeries(chartPlayers, selectedMetric)
-  const performanceChartData = buildPerformanceChartData(chartPlayers, selectedMetric)
-  const recipeChartData = selectedRecipePlayer === null ? [] : buildRecipeChartData(selectedRecipePlayer)
-  const hasHistory = chartPlayers.some((player) => player.history.length > 0)
-  const hasAnyRecipeHistory = chartPlayers.some((player) => recipeChartHasData(player))
-  const hasRecipeHistory = recipeChartHasData(selectedRecipePlayer)
+  const chartPlayers = buildChartPlayers(room.players)
+  const [chartLayout, setChartLayout] = useState<ResultsChartLayoutState>(() =>
+    readStoredResultsChartLayout(chartPlayers, currentPlayerId),
+  )
+  const selectedRecipePlayer = selectedRecipeChartPlayer(
+    chartPlayers,
+    chartLayout.recipe.selectedPlayerId,
+  )
+  const availableChartIds = availableResultsChartIds(chartLayout.splitChartIds)
+  const canSplitMainChart = availableChartIds.length > 1
 
   useEffect(() => {
-    if (chartPlayers.length === 0) {
-      setSelectedRecipePlayerId(null)
-      return
-    }
+    setChartLayout((currentLayout) =>
+      sanitizeResultsChartLayout(
+        {
+          version: RESULTS_CHART_LAYOUT_VERSION,
+          mainChartId: currentLayout.mainChartId,
+          splitChartIds: currentLayout.splitChartIds,
+          recipe: currentLayout.recipe,
+        },
+        buildChartPlayers(room.players),
+        currentPlayerId,
+      ),
+    )
+  }, [room.players, currentPlayerId])
 
-    setSelectedRecipePlayerId((currentValue) => {
-      if (currentValue !== null && chartPlayers.some((player) => player.id === currentValue)) {
-        return currentValue
-      }
-
-      return currentPlayerId ?? chartPlayers[0]!.id
-    })
-  }, [chartPlayers, currentPlayerId])
+  useEffect(() => {
+    writeStoredResultsChartLayout(chartLayout)
+  }, [chartLayout])
 
   return (
     <section className="app-stage">
@@ -2025,10 +2533,22 @@ function ResultsScreen({
               <MetricCard label="Cups Sold" value={`${player.dailyResults?.cupsSold ?? 0}`} />
               <MetricCard label="Revenue" value={formatMoney(player.dailyResults?.revenue ?? 0)} />
               <MetricCard label="Profit" value={formatMoney(latestHistoryEntry(player)?.profit ?? 0)} />
-              <MetricCard label="End Money" value={formatMoney(latestHistoryEntry(player)?.endingMoney ?? player.money)} />
-              <MetricCard label="End Rep" value={`${latestHistoryEntry(player)?.reputationAfter ?? player.reputation}/100`} />
-              <MetricCard label="Satisfaction" value={`${Math.round((player.dailyResults?.satisfaction ?? 0) * 100)}%`} />
-              <MetricCard label="Rep Change" value={formatSignedNumber(player.dailyResults?.reputationDelta ?? 0)} />
+              <MetricCard
+                label="End Money"
+                value={formatMoney(latestHistoryEntry(player)?.endingMoney ?? player.money)}
+              />
+              <MetricCard
+                label="End Rep"
+                value={`${latestHistoryEntry(player)?.reputationAfter ?? player.reputation}/100`}
+              />
+              <MetricCard
+                label="Satisfaction"
+                value={`${Math.round((player.dailyResults?.satisfaction ?? 0) * 100)}%`}
+              />
+              <MetricCard
+                label="Rep Change"
+                value={formatSignedNumber(player.dailyResults?.reputationDelta ?? 0)}
+              />
             </div>
             {room.isGameComplete ? (
               <div className="metric-grid compact-grid">
@@ -2045,165 +2565,71 @@ function ResultsScreen({
       <section className="panel">
         <p className="eyebrow">History</p>
         <div className="results-chart-header">
-          <h2>{chartTitle(selectedMetric)}</h2>
-          <div aria-label="Results chart filters" className="results-filter-row" role="group">
-            {(['revenue', 'profit', 'revenue-profit', 'money', 'reputation', 'satisfaction'] as const).map((metric) => (
-              <button
-                aria-pressed={selectedMetric === metric}
-                className={selectedMetric === metric ? 'filter-chip filter-chip-active' : 'filter-chip'}
-                key={metric}
-                onClick={() => setSelectedMetric(metric)}
-                type="button"
-              >
-                {chartMetricLabel(metric)}
-              </button>
-            ))}
-          </div>
-        </div>
-        {hasHistory ? (
-          <div className="results-chart-stack">
-            <div className="summary-chip-row chart-legend-row" aria-label="Performance legend">
-              {performanceSeries.map((series) => (
-                <span className="summary-chip chart-legend-chip" key={series.dataKey}>
-                  <span
-                    aria-hidden="true"
-                    className="chart-legend-swatch"
-                    data-series-color={series.stroke}
-                    data-series-dash={series.dash ?? 'solid'}
-                    style={{ '--chart-series-color': series.stroke } as CSSProperties}
-                  />
-                  {series.label}
-                </span>
-              ))}
-            </div>
-            <div className="results-chart-shell results-chart-shell-performance">
-              <ResponsiveContainer height="100%" width="100%">
-                <LineChart data={performanceChartData} margin={{ top: 8, right: 12, bottom: 4, left: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" opacity={0.25} />
-                  <XAxis allowDecimals={false} dataKey="day" />
-                  <YAxis
-                    allowDecimals={selectedMetric !== 'reputation' && selectedMetric !== 'satisfaction'}
-                    tickFormatter={(value) => formatChartValue(selectedMetric === 'revenue-profit' ? 'revenue' : selectedMetric, Number(value))}
-                  />
-                  <Tooltip
-                    formatter={(value) => {
-                      const numericValue = typeof value === 'number' ? value : Number(value)
-
-                      if (value === null || value === undefined || Number.isNaN(numericValue)) {
-                        return 'No data'
-                      }
-
-                      return formatChartValue(selectedMetric === 'revenue-profit' ? 'revenue' : selectedMetric, numericValue)
-                    }}
-                    labelFormatter={(day) => `Day ${day}`}
-                  />
-                  {performanceSeries.map((series) => (
-                    <Line
-                      connectNulls
-                      dataKey={series.dataKey}
-                      dot={false}
-                      key={series.dataKey}
-                      name={series.label}
-                      stroke={series.stroke}
-                      strokeDasharray={series.dash}
-                      strokeWidth={series.dash === undefined ? 3.25 : 2.75}
-                      type="monotone"
-                    />
-                  ))}
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-        ) : (
-          <p className="chart-empty-state muted">Play another day to start building a trend line for this stand.</p>
-        )}
-      </section>
-
-      <section className="panel">
-        <div className="results-chart-header">
-          <div>
-            <p className="eyebrow">Recipe History</p>
-            <h2>{selectedRecipePlayer === null ? 'No recipe history yet' : `Recipe over time: ${selectedRecipePlayer.name}`}</h2>
-          </div>
-          {room.targetPlayerCount > 1 ? (
-            <div aria-label="Recipe history player selector" className="results-filter-row" role="group">
-              {chartPlayers.map((player) => (
+          <h2>{chartTitle(chartLayout.mainChartId, selectedRecipePlayer)}</h2>
+          <div className="results-chart-actions">
+            <div aria-label="Results chart filters" className="results-filter-row" role="group">
+              {availableChartIds.map((chartId) => (
                 <button
-                  aria-pressed={player.id === selectedRecipePlayerId}
-                  className={player.id === selectedRecipePlayerId ? 'filter-chip filter-chip-active' : 'filter-chip'}
-                  key={player.id}
-                  onClick={() => setSelectedRecipePlayerId(player.id)}
+                  aria-pressed={chartLayout.mainChartId === chartId}
+                  className={chartLayout.mainChartId === chartId ? 'filter-chip filter-chip-active' : 'filter-chip'}
+                  key={chartId}
+                  onClick={() => setChartLayout((currentLayout) => selectMainResultsChart(currentLayout, chartId))}
                   type="button"
                 >
-                  {player.name}
+                  {chartMetricLabel(chartId)}
                 </button>
               ))}
             </div>
-          ) : null}
-        </div>
-        {hasRecipeHistory && selectedRecipePlayer !== null ? (
-          <div className="results-chart-stack">
-            <div className="summary-chip-row chart-legend-row" aria-label="Recipe legend">
-              <span className="summary-chip">Lemons</span>
-              <span className="summary-chip">Sugar</span>
-              <span className="summary-chip">Ice</span>
-            </div>
-            <div className="results-chart-shell results-chart-shell-recipe">
-              <ResponsiveContainer height="100%" width="100%">
-                <LineChart data={recipeChartData} margin={{ top: 8, right: 12, bottom: 4, left: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" opacity={0.25} />
-                  <XAxis allowDecimals={false} dataKey="day" />
-                  <YAxis allowDecimals tickFormatter={(value) => `${value}`} />
-                  <Tooltip
-                    formatter={(value, name) => {
-                      const numericValue = typeof value === 'number' ? value : Number(value)
-
-                      if (value === null || value === undefined || Number.isNaN(numericValue)) {
-                        return 'No data'
-                      }
-
-                      return [numericValue, typeof name === 'string' ? name : '']
-                    }}
-                    labelFormatter={(day) => `Day ${day}`}
-                  />
-                  <Line
-                    connectNulls
-                    dataKey="lemons"
-                    dot={false}
-                    name="Lemons"
-                    stroke="#f3b63f"
-                    strokeWidth={3}
-                    type="monotone"
-                  />
-                  <Line
-                    connectNulls
-                    dataKey="sugar"
-                    dot={false}
-                    name="Sugar"
-                    stroke="#2a8da8"
-                    strokeWidth={3}
-                    type="monotone"
-                  />
-                  <Line
-                    connectNulls
-                    dataKey="ice"
-                    dot={false}
-                    name="Ice"
-                    stroke="#4b8e8d"
-                    strokeWidth={3}
-                    type="monotone"
-                  />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
+            <button
+              className="filter-chip split-chart-button"
+              disabled={!canSplitMainChart}
+              onClick={() => setChartLayout((currentLayout) => splitResultsChartLayout(currentLayout))}
+              type="button"
+            >
+              Split Chart
+            </button>
           </div>
-        ) : (
-          <p className="chart-empty-state muted">
-            {hasAnyRecipeHistory
-              ? `No recipe snapshots are available for ${selectedRecipePlayer?.name ?? 'the selected player'} yet.`
-              : 'Play another day to start tracking recipe trends.'}
-          </p>
-        )}
+        </div>
+        <ResultsChartPanel
+          chartId={chartLayout.mainChartId}
+          chartPlayers={chartPlayers}
+          onSelectRecipePlayerId={(playerId) =>
+            setChartLayout((currentLayout) => selectRecipeChartPlayer(currentLayout, playerId))
+          }
+          selectedRecipePlayerId={chartLayout.recipe.selectedPlayerId}
+        />
+
+        {chartLayout.splitChartIds.length > 0 ? (
+          <div aria-label="Split results charts" className="results-split-chart-list">
+            {chartLayout.splitChartIds.map((chartId) => (
+              <section className="results-split-chart-panel" key={chartId}>
+                <div className="results-chart-header">
+                  <div>
+                    <p className="eyebrow">{chartId === 'recipe' ? 'Recipe History' : 'Split chart'}</p>
+                    <h3>{chartTitle(chartId, selectedRecipePlayer)}</h3>
+                  </div>
+                  <button
+                    className="filter-chip"
+                    onClick={() =>
+                      setChartLayout((currentLayout) => recombineResultsChartLayout(currentLayout, chartId))
+                    }
+                    type="button"
+                  >
+                    Recombine
+                  </button>
+                </div>
+                <ResultsChartPanel
+                  chartId={chartId}
+                  chartPlayers={chartPlayers}
+                  onSelectRecipePlayerId={(playerId) =>
+                    setChartLayout((currentLayout) => selectRecipeChartPlayer(currentLayout, playerId))
+                  }
+                  selectedRecipePlayerId={chartLayout.recipe.selectedPlayerId}
+                />
+              </section>
+            ))}
+          </div>
+        ) : null}
       </section>
 
       {room.isGameComplete ? (
@@ -2227,7 +2653,9 @@ function ResultsScreen({
             {hasRequestedNextDay
               ? isSingleplayerRoom
                 ? 'Loading the next day...'
-                : 'Next day requested. Waiting on the other stand.'
+                : remainingNextDayRequests === 0
+                  ? 'Loading the next day...'
+                  : `Next day requested. Waiting on ${pluralize(remainingNextDayRequests, 'more player')}.`
               : isSingleplayerRoom
                 ? 'Start the next day when you are ready.'
                 : 'Request the next day when you are ready to keep playing.'}
@@ -2260,6 +2688,7 @@ function App(): JSX.Element {
     name: reconnectSession?.name ?? searchParam('name') ?? '',
     roomId: reconnectSession?.roomId ?? searchParam('roomId') ?? '',
     factionId: reconnectSession?.factionId ?? searchParam('faction') ?? DEFAULT_HOST_FACTION,
+    targetPlayerCount: DEFAULT_MULTIPLAYER_PLAYER_COUNT,
     runLengthDays: 14,
   })
   const [session, setSession] = useState<StoredRoomSession | null>(null)
@@ -2425,12 +2854,21 @@ function App(): JSX.Element {
       return
     }
 
+    let validatedTargetPlayerCount: number
+
+    try {
+      validatedTargetPlayerCount = validateTargetPlayerCount(gameMode, targetPlayerCount)
+    } catch (validationError) {
+      setError(validationError instanceof Error ? validationError.message : 'Unsupported room size.')
+      return
+    }
+
     connectAndSend(
       {
         type: 'create_room',
         name: lobbyForm.name,
         gameMode,
-        targetPlayerCount,
+        targetPlayerCount: validatedTargetPlayerCount,
         runLengthDays: lobbyForm.runLengthDays,
         faction: factionDefinition(lobbyForm.factionId),
         analyticsPlayerId: analyticsPlayerIdRef.current,
@@ -2444,11 +2882,11 @@ function App(): JSX.Element {
   }
 
   function hostRoom(): void {
-    startGame('multiplayer', 2)
+    startGame('multiplayer', lobbyForm.targetPlayerCount)
   }
 
   function playSinglePlayer(): void {
-    startGame('singleplayer', 1)
+    startGame('singleplayer', SINGLEPLAYER_TARGET_COUNT)
   }
 
   function joinRoomFlow(playerId?: string, factionId = DEFAULT_JOIN_FACTION): void {
@@ -2571,6 +3009,7 @@ function App(): JSX.Element {
         <WaitingScreen
           roomId={room?.roomId ?? session.roomId}
           gameMode={pendingGameMode}
+          room={room}
         />
       ) : null}
       {room === null ? (

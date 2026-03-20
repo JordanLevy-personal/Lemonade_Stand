@@ -1,6 +1,8 @@
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vitest/config'
 
+const websocketProxyPort = Number(process.env.WS_PROXY_TARGET_PORT ?? 3001)
+
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
@@ -8,7 +10,7 @@ export default defineConfig({
     host: '0.0.0.0',
     proxy: {
       '/ws': {
-        target: 'ws://127.0.0.1:3001',
+        target: `ws://127.0.0.1:${websocketProxyPort}`,
         ws: true,
       },
     },
