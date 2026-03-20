@@ -4,7 +4,7 @@ export type GameMode = 'singleplayer' | 'multiplayer'
 export type Weather = 'sunny' | 'hot' | 'cloudy' | 'raining'
 
 export type ConnectionStatus = 'connected' | 'disconnected'
-export type RunUpgradeId = 'recipe-feedback-hints'
+export type RunUpgradeId = 'recipe-feedback-hints' | 'market-espionage'
 
 export type CustomerOutcome = 'buy' | 'skip' | 'soldOut'
 export type CustomerOutcomeReason =
@@ -34,6 +34,7 @@ export interface RecipeFeedbackHint {
 
 export interface OwnedUpgrades {
   recipeFeedbackHints: boolean
+  marketEspionage: boolean
 }
 
 export interface DailyPlan {
@@ -215,6 +216,7 @@ export interface BalanceConfig {
   defaultRecipe: Recipe
   defaultPrice: number
   recipeFeedbackHintUpgradeCost: number
+  marketEspionageUpgradeCost: number
   customerTastePreferenceWeight: number
   weatherProfiles: Record<Weather, WeatherProfile>
   marketPriceBands: Record<keyof Inventory, IngredientPriceBand>

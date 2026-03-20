@@ -75,11 +75,15 @@ function createHooks(): RoomGameHooks {
       }
     },
     getUpgradeCost(upgradeId: RunUpgradeId): number {
-      if (upgradeId !== 'recipe-feedback-hints') {
-        throw new Error('Unknown upgrade.')
+      if (upgradeId === 'recipe-feedback-hints') {
+        return 25
       }
 
-      return 25
+      if (upgradeId === 'market-espionage') {
+        return 15
+      }
+
+      throw new Error('Unknown upgrade.')
     },
     startSimulation(room: RoomState, simulationStartAt: number): { room: RoomState; telemetry: SimulationTelemetry } {
       return {
@@ -181,6 +185,7 @@ function createHooks(): RoomGameHooks {
         reputation: 50,
         ownedUpgrades: {
           recipeFeedbackHints: false,
+          marketEspionage: false,
         },
       }
     },
@@ -198,6 +203,7 @@ function createRichManager(now = 10_000): RoomManager {
           reputation: 50,
           ownedUpgrades: {
             recipeFeedbackHints: false,
+            marketEspionage: false,
           },
         }
       },
@@ -373,6 +379,53 @@ describe('RoomManager', () => {
 
     expect(host?.money).toBe(5)
     expect(host?.ownedUpgrades?.recipeFeedbackHints).toBe(true)
+  })
+
+  it('purchases the market espionage upgrade during planning and deducts the cost', () => {
+    const manager = createRichManager()
+    createMultiplayerRoom(manager)
+    manager.joinRoom({
+      roomId: 'ROOM01',
+      name: 'Guest',
+      faction: FACTION_BETA,
+      analyticsPlayerId: 'analytics-guest',
+    })
+
+    const room = manager.purchaseUpgrade({
+      roomId: 'ROOM01',
+      playerId: 'host-1',
+      upgradeId: 'market-espionage',
+    })
+
+    const host = room.players.find((player) => player.id === 'host-1')
+
+    expect(host?.money).toBe(15)
+    expect(host?.ownedUpgrades?.marketEspionage).toBe(true)
+  })
+
+  it('rejects repurchasing an owned upgrade', () => {
+    const manager = createRichManager()
+    createMultiplayerRoom(manager)
+    manager.joinRoom({
+      roomId: 'ROOM01',
+      name: 'Guest',
+      faction: FACTION_BETA,
+      analyticsPlayerId: 'analytics-guest',
+    })
+
+    manager.purchaseUpgrade({
+      roomId: 'ROOM01',
+      playerId: 'host-1',
+      upgradeId: 'market-espionage',
+    })
+
+    expect(() =>
+      manager.purchaseUpgrade({
+        roomId: 'ROOM01',
+        playerId: 'host-1',
+        upgradeId: 'market-espionage',
+      }),
+    ).toThrow(/already owned/i)
   })
 
   it('starts simulation automatically once both players submit plans', () => {

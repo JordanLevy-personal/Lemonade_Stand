@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type Server as HttpServer } from 'n
 
 import { defaultBalanceConfig } from '../src/game/balance'
 import type { SimulationTelemetry } from '../src/game/types'
+import { isUpgradeOwned } from '../src/game/upgrades'
 import type { ClientMessage, PlayerSession, RoomState, ServerMessage } from './contracts'
 import { createDefaultRoomGameHooks } from './default-game-hooks'
 import { RoomManager } from './room-manager'
@@ -94,7 +95,10 @@ function projectCustomerEventForViewer(
 ): RoomSimulationEvent {
   const viewerOwnsHints =
     viewerPlayerId !== null &&
-    room.players.find((player) => player.id === viewerPlayerId)?.ownedUpgrades?.recipeFeedbackHints === true
+    isUpgradeOwned(
+      room.players.find((player) => player.id === viewerPlayerId)?.ownedUpgrades,
+      'recipe-feedback-hints',
+    )
   const { feedbackHintsByPlayerId, ...publicEvent } = event
 
   return {
@@ -106,9 +110,33 @@ function projectCustomerEventForViewer(
   }
 }
 
+function projectHistoryForViewer(
+  room: RoomState,
+  viewerPlayerId: string | null,
+  player: RoomState['players'][number],
+): RoomState['players'][number]['history'] {
+  if (
+    room.gameMode === 'singleplayer' ||
+    viewerPlayerId === null ||
+    player.id === viewerPlayerId ||
+    isUpgradeOwned(
+      room.players.find((candidate) => candidate.id === viewerPlayerId)?.ownedUpgrades,
+      'market-espionage',
+    )
+  ) {
+    return player.history
+  }
+
+  return player.history.map(({ recipeSnapshot: _recipeSnapshot, ...historyEntry }) => historyEntry)
+}
+
 function projectRoomForViewer(room: RoomState, viewerPlayerId: string | null): RoomState {
   return {
     ...room,
+    players: room.players.map((player) => ({
+      ...player,
+      history: projectHistoryForViewer(room, viewerPlayerId, player),
+    })),
     simulation:
       room.simulation === null
         ? null
@@ -236,6 +264,7 @@ export async function createLanServer(
       reputationBeforePlanning: player.reputation,
       inventoryBeforePlanning: player.inventory,
       recipeFeedbackHintsOwnedBeforePlanning: player.ownedUpgrades?.recipeFeedbackHints === true,
+      marketEspionageOwnedBeforePlanning: player.ownedUpgrades?.marketEspionage === true,
       purchases: plan.purchases,
       recipe: plan.recipe,
       price: plan.price,
@@ -272,6 +301,7 @@ export async function createLanServer(
         reputationAfterResults: player.reputation,
         inventoryAfterResults: player.inventory,
         recipeFeedbackHintsOwnedAfterResults: player.ownedUpgrades?.recipeFeedbackHints === true,
+        marketEspionageOwnedAfterResults: player.ownedUpgrades?.marketEspionage === true,
         cupsSold: player.dailyResults.cupsSold,
         revenue: player.dailyResults.revenue,
         satisfaction: player.dailyResults.satisfaction,

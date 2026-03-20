@@ -164,6 +164,13 @@
           "rationale": "Shows whether the player had already unlocked the recipe hint upgrade when the day's plan was submitted."
         },
         {
+          "name": "marketEspionageOwnedBeforePlanning",
+          "type": "boolean",
+          "source": "pre-submit player upgrade snapshot",
+          "implemented": true,
+          "rationale": "Shows whether the player had already unlocked Market Espionage when the day's plan was submitted."
+        },
+        {
           "name": "moneyBeforePlanning",
           "type": "number",
           "source": "pre-submit player snapshot",
@@ -211,6 +218,13 @@
           "source": "post-simulation player upgrade snapshot",
           "implemented": true,
           "rationale": "Lets balancing review compare run outcomes for players who ended the day with the hint upgrade unlocked."
+        },
+        {
+          "name": "marketEspionageOwnedAfterResults",
+          "type": "boolean",
+          "source": "post-simulation player upgrade snapshot",
+          "implemented": true,
+          "rationale": "Lets balancing review compare later-day planning outcomes for players who ended the day with Market Espionage unlocked."
         },
         {
           "name": "moneyAfterResults",

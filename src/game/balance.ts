@@ -10,6 +10,7 @@ export const defaultBalanceConfig: BalanceConfig = {
   },
   defaultPrice: 1.5,
   recipeFeedbackHintUpgradeCost: 25,
+  marketEspionageUpgradeCost: 15,
   customerTastePreferenceWeight: 0.2,
   maxPlayers: 2,
   reputationMin: 0,

@@ -852,6 +852,13 @@
   color: #fffaf0;
 }
 
+.filter-chip-disabled {
+  border-color: rgba(29, 74, 79, 0.1);
+  background: rgba(200, 209, 214, 0.45);
+  color: rgba(29, 74, 79, 0.45);
+  cursor: help;
+}
+
 .split-chart-button:disabled {
   cursor: not-allowed;
   opacity: 0.55;

@@ -13,6 +13,7 @@ import type {
 import type { SimulationTelemetry } from '../src/game/types'
 import { validateTargetPlayerCount } from '../src/shared/room-player-count'
 import { determineFinalOutcome, normalizeRunLengthDays } from './final-outcome'
+import { isUpgradeOwned, unlockUpgrade } from '../src/game/upgrades'
 
 export interface RoomGameHooks {
   createDay: (day: number) => {
@@ -356,11 +357,7 @@ export class RoomManager {
       throw new Error('The selected player could not be found.')
     }
 
-    if (input.upgradeId !== 'recipe-feedback-hints') {
-      throw new Error('Unknown upgrade.')
-    }
-
-    const ownsUpgrade = player.ownedUpgrades?.recipeFeedbackHints ?? false
+    const ownsUpgrade = isUpgradeOwned(player.ownedUpgrades, input.upgradeId)
     if (ownsUpgrade) {
       throw new Error('That upgrade is already owned.')
     }
@@ -377,10 +374,7 @@ export class RoomManager {
           ? {
               ...candidate,
               money: candidate.money - cost,
-              ownedUpgrades: {
-                ...(candidate.ownedUpgrades ?? { recipeFeedbackHints: false }),
-                recipeFeedbackHints: true,
-              },
+              ownedUpgrades: unlockUpgrade(candidate.ownedUpgrades, input.upgradeId),
             }
           : candidate,
       ),

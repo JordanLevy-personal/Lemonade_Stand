@@ -58,7 +58,7 @@ export interface PlayerDayHistoryEntry {
   reputationAfter: number
   cupsSold: number
   satisfaction: number
-  recipeSnapshot: Recipe
+  recipeSnapshot?: Recipe
 }
 
 export interface MarketBasePrices {
