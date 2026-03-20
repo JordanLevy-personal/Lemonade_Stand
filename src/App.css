@@ -876,6 +876,23 @@
   align-items: center;
 }
 
+.chart-legend-chip {
+  gap: 0.55rem;
+  font-weight: 700;
+}
+
+.chart-legend-swatch {
+  width: 1.5rem;
+  flex: 0 0 auto;
+  border-top: 0.25rem solid var(--chart-series-color);
+  border-radius: 999px;
+}
+
+.chart-legend-swatch[data-series-dash='6 5'] {
+  border-top-style: dashed;
+  border-top-width: 0.2rem;
+}
+
 .results-chart-shell-performance,
 .results-chart-shell-recipe {
   height: 21rem;
@@ -991,8 +1008,18 @@
   .stand-column-compact .stand-score {
     font-size: 0.72rem;
     padding: 0.25rem 0.45rem;
+  }
+
   .results-chart-header {
     flex-direction: column;
+  }
+
+  .chart-legend-chip {
+    gap: 0.45rem;
+  }
+
+  .chart-legend-swatch {
+    width: 1.2rem;
   }
 
   .results-chart-actions {

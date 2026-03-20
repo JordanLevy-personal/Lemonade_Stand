@@ -61,6 +61,7 @@ const MAX_DEV_SIMULATION_SPEED = 2
 const BUSINESS_DAY_START_MINUTES = 8 * 60
 const BUSINESS_DAY_END_MINUTES = 18 * 60
 const SHOW_DEV_CONTROLS = import.meta.env.DEV || import.meta.env.MODE === 'test'
+const PERFORMANCE_CHART_PALETTE = ['#f3b63f', '#2a8da8', '#ef6f51', '#6b62c5'] as const
 
 type ResultsChartMetric = 'revenue' | 'profit' | 'money' | 'reputation' | 'satisfaction'
 type ResultsPerformanceChartId = ResultsChartMetric | 'revenue-profit'
@@ -99,6 +100,7 @@ type HistoryEntry = RoomState['players'][number]['history'][number] & {
 }
 
 type ChartPlayer = RoomState['players'][number] & {
+  chartColor: string
   history: HistoryEntry[]
 }
 
@@ -1312,18 +1314,30 @@ function formatChartValue(metric: ResultsChartMetric, value: number): string {
   return formatMoney(value)
 }
 
+function performanceChartColor(playerIndex: number): string {
+  return PERFORMANCE_CHART_PALETTE[playerIndex % PERFORMANCE_CHART_PALETTE.length] ?? PERFORMANCE_CHART_PALETTE[0]
+}
+
+function buildChartPlayers(players: RoomState['players']): ChartPlayer[] {
+  return players.map((player, index) => ({
+    ...player,
+    chartColor: performanceChartColor(index),
+    history: player.history as HistoryEntry[],
+  }))
+}
+
 function buildPerformanceChartSeries(players: ChartPlayer[], mode: ResultsPerformanceChartId): ChartSeries[] {
   if (mode === 'revenue-profit') {
     return players.flatMap((player) => [
       {
         dataKey: `${player.id}-revenue`,
         label: `${player.name} Revenue`,
-        stroke: player.faction.accentColor,
+        stroke: player.chartColor,
       },
       {
         dataKey: `${player.id}-profit`,
         label: `${player.name} Profit`,
-        stroke: player.faction.accentColor,
+        stroke: player.chartColor,
         dash: '6 5',
       },
     ])
@@ -1332,7 +1346,7 @@ function buildPerformanceChartSeries(players: ChartPlayer[], mode: ResultsPerfor
   return players.map((player) => ({
     dataKey: player.id,
     label: player.name,
-    stroke: player.faction.accentColor,
+    stroke: player.chartColor,
   }))
 }
 
@@ -2279,7 +2293,14 @@ function PerformanceChart({
     <div className="results-chart-stack">
       <div className="summary-chip-row chart-legend-row" aria-label="Performance legend">
         {performanceSeries.map((series) => (
-          <span className="summary-chip" key={series.dataKey}>
+          <span className="summary-chip chart-legend-chip" key={series.dataKey}>
+            <span
+              aria-hidden="true"
+              className="chart-legend-swatch"
+              data-series-color={series.stroke}
+              data-series-dash={series.dash ?? 'solid'}
+              style={{ '--chart-series-color': series.stroke } as CSSProperties}
+            />
             {series.label}
           </span>
         ))}
@@ -2465,7 +2486,7 @@ function ResultsScreen({
     0,
     room.targetPlayerCount - room.requestedNextDayPlayerIds.length,
   )
-  const chartPlayers = room.players as ChartPlayer[]
+  const chartPlayers = buildChartPlayers(room.players)
   const [chartLayout, setChartLayout] = useState<ResultsChartLayoutState>(() =>
     readStoredResultsChartLayout(chartPlayers, currentPlayerId),
   )
@@ -2485,11 +2506,11 @@ function ResultsScreen({
           splitChartIds: currentLayout.splitChartIds,
           recipe: currentLayout.recipe,
         },
-        chartPlayers,
+        buildChartPlayers(room.players),
         currentPlayerId,
       ),
     )
-  }, [chartPlayers, currentPlayerId])
+  }, [room.players, currentPlayerId])
 
   useEffect(() => {
     writeStoredResultsChartLayout(chartLayout)

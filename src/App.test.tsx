@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react'
+import type { ReactElement } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import App, { RESULTS_CHART_LAYOUT_KEY, ROOM_SESSION_KEY, standAnchorPercents } from './App'
@@ -22,6 +23,22 @@ vi.mock('./client/socket', () => ({
     }
   },
 }))
+
+vi.mock('recharts', async () => {
+  const actual = await vi.importActual<typeof import('recharts')>('recharts')
+  const react = await vi.importActual<typeof import('react')>('react')
+
+  return {
+    ...actual,
+    ResponsiveContainer: ({ children }: { children?: unknown }) =>
+      react.isValidElement(children)
+        ? react.cloneElement(
+            children as ReactElement<{ height?: number; width?: number }>,
+            { height: 336, width: 720 },
+          )
+        : null,
+  }
+})
 
 const SUN_FACTION: FactionDefinition = {
   id: 'sun-guild',
@@ -375,6 +392,95 @@ function emitMessage(message: unknown): void {
   act(() => {
     latestHandlers?.onMessage(message as never)
   })
+}
+
+function openResultsScreen(players = createResultsPlayers()): void {
+  render(<App />)
+
+  fireEvent.change(screen.getByLabelText(/your name/i), {
+    target: { value: 'Alex' },
+  })
+  fireEvent.click(screen.getByRole('button', { name: /host room/i }))
+
+  emitMessage({
+    type: 'connected',
+    roomId: 'ROOM-42',
+    playerId: 'player-host',
+    hostPlayerId: 'player-host',
+  })
+  emitMessage({
+    type: 'room_state',
+    room: createRoom({
+      phase: 'results',
+      players,
+    }),
+  })
+}
+
+function createResultsPlayers(
+  overrides?: (player: RoomState['players'][number], index: number) => Partial<RoomState['players'][number]>,
+): RoomState['players'] {
+  return createRoom().players.map((player, index) => ({
+    ...player,
+    dailyResults: {
+      cupsSold: 10 - index,
+      revenue: 18 - index * 4,
+      satisfaction: 0.8 - index * 0.1,
+      reputationDelta: 4 - index,
+      customersWon: 10 - index,
+      customersSkipped: 3 + index,
+      customersSoldOut: index,
+    },
+    history: [
+      createHistoryEntry({
+        day: 1,
+        revenue: 15 - index * 4,
+        purchaseCost: 5,
+        profit: 10 - index * 4,
+        endingMoney: 24 + index,
+        reputationAfter: 50 + index,
+        cupsSold: 8 - index,
+        satisfaction: 0.7 - index * 0.1,
+        recipeSnapshot: {
+          lemons: 1 + index * 0.5,
+          sugar: 2,
+          ice: 3 - index,
+        },
+      }),
+      createHistoryEntry({
+        day: 2,
+        revenue: 18 - index * 4,
+        purchaseCost: 6,
+        profit: 12 - index * 4,
+        endingMoney: 30 + index,
+        reputationAfter: 54 + index,
+        cupsSold: 10 - index,
+        satisfaction: 0.8 - index * 0.1,
+        recipeSnapshot: {
+          lemons: 1.5 + index * 0.5,
+          sugar: 2.5,
+          ice: 2 - index,
+        },
+      }),
+    ],
+    ...overrides?.(player, index),
+  })) as RoomState['players']
+}
+
+function getPerformanceLineCurves(): SVGPathElement[] {
+  return [...document.querySelectorAll<SVGPathElement>('.results-chart-shell-performance .recharts-line-curve')]
+}
+
+function getPerformanceLegendSwatch(label: RegExp): HTMLElement {
+  const legend = screen.getByLabelText(/performance legend/i)
+  const seriesLabel = within(legend).getByText(label)
+  const swatch = seriesLabel.closest('.summary-chip')?.querySelector('.chart-legend-swatch')
+
+  if (!(swatch instanceof HTMLElement)) {
+    throw new Error(`Unable to find legend swatch for ${label.toString()}`)
+  }
+
+  return swatch
 }
 
 describe('App', () => {
@@ -2485,6 +2591,27 @@ describe('App', () => {
     expect(screen.queryByRole('button', { name: /^next day$/i })).not.toBeInTheDocument()
   })
 
+  it('switches the results chart with metric filter buttons', () => {
+    openResultsScreen()
+
+    expect(screen.getByRole('heading', { name: /revenue over time/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /revenue \+ profit/i })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /revenue \+ profit/i }))
+    expect(screen.getByRole('heading', { name: /revenue and profit over time/i })).toBeInTheDocument()
+    expect(screen.getByText(/alex revenue/i)).toBeInTheDocument()
+    expect(screen.getByText(/alex profit/i)).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /^money$/i }))
+    expect(screen.getByRole('heading', { name: /money over time/i })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /^satisfaction$/i }))
+    expect(screen.getByRole('heading', { name: /satisfaction over time/i })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /^profit$/i }))
+    expect(screen.getByRole('heading', { name: /profit over time/i })).toBeInTheDocument()
+  })
+
   it('splits the main chart, promotes the next chart, and recombines it into the filter pool', () => {
     render(<App />)
 
@@ -2569,6 +2696,65 @@ describe('App', () => {
     expect(screen.queryByLabelText(/split results charts/i)).not.toBeInTheDocument()
     expect(within(filterRow).getByRole('button', { name: /^revenue$/i })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: /profit over time/i })).toBeInTheDocument()
+  })
+
+  it('assigns different player colors to multiplayer chart lines even when factions match', () => {
+    openResultsScreen(
+      createResultsPlayers((_, index) => ({
+        faction: SUN_FACTION,
+        name: index === 0 ? 'Alex' : 'Blair',
+      })),
+    )
+
+    const lineStrokes = getPerformanceLineCurves()
+      .map((curve) => curve.getAttribute('stroke'))
+      .filter((stroke): stroke is string => stroke !== null)
+
+    expect(lineStrokes).toHaveLength(2)
+    expect(new Set(lineStrokes).size).toBe(2)
+
+    const alexSwatch = getPerformanceLegendSwatch(/^alex$/i)
+    const blairSwatch = getPerformanceLegendSwatch(/^blair$/i)
+    const alexColor = alexSwatch.getAttribute('data-series-color')
+    const blairColor = blairSwatch.getAttribute('data-series-color')
+
+    expect(alexColor).toBeTruthy()
+    expect(blairColor).toBeTruthy()
+    expect(alexColor).not.toBe(blairColor)
+    expect(lineStrokes).toContain(alexColor!)
+    expect(lineStrokes).toContain(blairColor!)
+  })
+
+  it('keeps a shared player color for revenue and profit overlay while marking profit as dashed', () => {
+    openResultsScreen(
+      createResultsPlayers((_, index) => ({
+        faction: SUN_FACTION,
+        name: index === 0 ? 'Alex' : 'Blair',
+      })),
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /revenue \+ profit/i }))
+
+    const curves = getPerformanceLineCurves()
+    const curveColors = curves
+      .map((curve) => curve.getAttribute('stroke'))
+      .filter((stroke): stroke is string => stroke !== null)
+
+    expect(curves).toHaveLength(4)
+    expect(new Set(curveColors).size).toBe(2)
+
+    const alexRevenueSwatch = getPerformanceLegendSwatch(/alex revenue/i)
+    const alexProfitSwatch = getPerformanceLegendSwatch(/alex profit/i)
+    const blairRevenueSwatch = getPerformanceLegendSwatch(/blair revenue/i)
+    const blairProfitSwatch = getPerformanceLegendSwatch(/blair profit/i)
+
+    expect(alexRevenueSwatch).toHaveAttribute('data-series-color', alexProfitSwatch.getAttribute('data-series-color'))
+    expect(blairRevenueSwatch).toHaveAttribute('data-series-color', blairProfitSwatch.getAttribute('data-series-color'))
+    expect(alexRevenueSwatch.getAttribute('data-series-color')).not.toBe(blairRevenueSwatch.getAttribute('data-series-color'))
+    expect(alexRevenueSwatch).toHaveAttribute('data-series-dash', 'solid')
+    expect(blairRevenueSwatch).toHaveAttribute('data-series-dash', 'solid')
+    expect(alexProfitSwatch).toHaveAttribute('data-series-dash', '6 5')
+    expect(blairProfitSwatch).toHaveAttribute('data-series-dash', '6 5')
   })
 
   it('persists split charts and recipe player selection across refresh', () => {
