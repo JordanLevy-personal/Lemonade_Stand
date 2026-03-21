@@ -1537,3 +1537,74 @@ describe('persistent customer profiles', () => {
     expect(guest?.dailyResults.cupsSold).toBe(0)
   })
 })
+
+describe('weather WTP and ingredient cost margin tuning', () => {
+  it('sets rainy baseWillingnessToPay to 1.55', () => {
+    expect(defaultBalanceConfig.weatherProfiles.raining.baseWillingnessToPay).toBe(1.55)
+  })
+
+  it('sets cloudy baseWillingnessToPay to 1.80', () => {
+    expect(defaultBalanceConfig.weatherProfiles.cloudy.baseWillingnessToPay).toBe(1.80)
+  })
+
+  it('does not change hot baseWillingnessToPay from 2.0', () => {
+    expect(defaultBalanceConfig.weatherProfiles.hot.baseWillingnessToPay).toBe(2)
+  })
+
+  it('does not change sunny baseWillingnessToPay from 1.9', () => {
+    expect(defaultBalanceConfig.weatherProfiles.sunny.baseWillingnessToPay).toBe(1.9)
+  })
+
+  it('sets lemon price band to min 0.20, max 0.50', () => {
+    expect(defaultBalanceConfig.marketPriceBands.lemons).toEqual({ min: 0.20, max: 0.50 })
+  })
+
+  it('generates rainy WTP values in the expected range (base 1.55 + variance 0.55)', () => {
+    // WTP = baseWillingnessToPay + roll * willingnessVariance
+    // roll is [0, 1), so range is [1.55, 1.55 + 0.55) = [1.55, 2.10)
+    const { baseWillingnessToPay, willingnessVariance } = defaultBalanceConfig.weatherProfiles.raining
+    const minWtp = baseWillingnessToPay
+    const maxWtp = baseWillingnessToPay + willingnessVariance
+
+    expect(minWtp).toBeCloseTo(1.55, 2)
+    expect(maxWtp).toBeCloseTo(2.10, 2)
+  })
+
+  it('generates cloudy WTP values in the expected range (base 1.80 + variance 0.75)', () => {
+    const { baseWillingnessToPay, willingnessVariance } = defaultBalanceConfig.weatherProfiles.cloudy
+    const minWtp = baseWillingnessToPay
+    const maxWtp = baseWillingnessToPay + willingnessVariance
+
+    expect(minWtp).toBeCloseTo(1.80, 2)
+    expect(maxWtp).toBeCloseTo(2.55, 2)
+  })
+
+  it('produces a viable profit margin for ideal rainy recipe at new cost bands', () => {
+    // Ideal rainy recipe: 3L/3S/0I
+    // Cost per cup at max prices: 3*0.50 + 3*0.28 + 0 = $2.34
+    // Cost per cup at min prices: 3*0.20 + 3*0.12 + 0 = $0.96
+    // WTP range: [1.55, 2.10)
+    // Margin at min cost, min WTP: 1.55 - 0.96 = $0.59
+    // Margin at max cost, min WTP: 1.55 - 2.34 = -$0.79 (bad market day)
+    // Margin at mid cost: mid lemon = 0.35, mid sugar = 0.20
+    //   cost = 3*0.35 + 3*0.20 = $1.65, margin = 1.55 - 1.65 = -$0.10
+    // At mid WTP (1.825): margin = 1.825 - 1.65 = $0.175
+    // The point is that at favorable cost bands there IS a viable margin
+    const lemonMin = defaultBalanceConfig.marketPriceBands.lemons.min
+    const sugarMin = defaultBalanceConfig.marketPriceBands.sugar.min
+    const minCostPerCup = 3 * lemonMin + 3 * sugarMin
+    const rainyMinWtp = defaultBalanceConfig.weatherProfiles.raining.baseWillingnessToPay
+
+    // At minimum ingredient costs, rainy WTP floor provides positive margin
+    expect(rainyMinWtp - minCostPerCup).toBeGreaterThan(0.30)
+    expect(rainyMinWtp - minCostPerCup).toBeLessThan(0.80)
+  })
+
+  it('keeps sugar price band unchanged', () => {
+    expect(defaultBalanceConfig.marketPriceBands.sugar).toEqual({ min: 0.12, max: 0.28 })
+  })
+
+  it('keeps ice price band unchanged', () => {
+    expect(defaultBalanceConfig.marketPriceBands.ice).toEqual({ min: 0.05, max: 0.14 })
+  })
+})

@@ -47,7 +47,7 @@ export const defaultBalanceConfig: BalanceConfig = {
         sugar: 2,
         ice: 1,
       },
-      baseWillingnessToPay: 1.65,
+      baseWillingnessToPay: 1.80,
       willingnessVariance: 0.75,
     },
     raining: {
@@ -58,14 +58,14 @@ export const defaultBalanceConfig: BalanceConfig = {
         sugar: 3,
         ice: 0,
       },
-      baseWillingnessToPay: 1.35,
+      baseWillingnessToPay: 1.55,
       willingnessVariance: 0.55,
     },
   },
   marketPriceBands: {
     lemons: {
-      min: 0.3,
-      max: 0.65,
+      min: 0.20,
+      max: 0.50,
     },
     sugar: {
       min: 0.12,
