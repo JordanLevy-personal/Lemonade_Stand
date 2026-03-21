@@ -23,6 +23,7 @@ import {
   sanitizeRecipe,
 } from './game/engine'
 import { getUpgradeOwnershipKey } from './game/upgrades'
+import { useBackgroundMusic } from './hooks/useBackgroundMusic'
 import type { DailyPlan, Inventory, Recipe, RunUpgradeId } from './game/types'
 import type {
   ClientMessage,
@@ -2802,6 +2803,8 @@ function PausedScreen({ room }: { room: RoomState }): JSX.Element {
 }
 
 function App(): JSX.Element {
+  useBackgroundMusic()
+
   const [reconnectSession, setReconnectSession] = useState<StoredRoomSession | null>(() =>
     readStoredRoomSession(),
   )
