@@ -29,6 +29,9 @@ const RECIPE_PRECISION = 1
 const INVENTORY_EPSILON = 1e-9
 const SATISFACTION_CURVE_EXPONENT = 2
 const PRICE_SCORE_EXPONENT = 6.4
+const REPUTATION_BREAKEVEN_SATISFACTION = 0.50
+const REPUTATION_SCALING_FACTOR = 5
+const REPUTATION_WTP_MAX_MODIFIER = 0.15
 const CUSTOMER_ENTRY_TRAVEL_MS = 1_080
 const CUSTOMER_STAND_DWELL_MS = 1_000
 const CUSTOMER_BETWEEN_STANDS_MS = 840
@@ -591,6 +594,19 @@ function curveScore(score: number): number {
   return clamp(score, 0, 1) ** SATISFACTION_CURVE_EXPONENT
 }
 
+export function _calculateReputationDelta(avgSatisfaction: number, cupsSold: number): number {
+  if (cupsSold === 0) {
+    return -1
+  }
+  const volumeScale = Math.max(2, Math.round(cupsSold / 4))
+  return Math.round((avgSatisfaction - REPUTATION_BREAKEVEN_SATISFACTION) * volumeScale * REPUTATION_SCALING_FACTOR)
+}
+
+export function _effectiveWtp(baseWtp: number, reputation: number): number {
+  const modifier = clamp(REPUTATION_WTP_MAX_MODIFIER * (reputation - 50) / 50, -REPUTATION_WTP_MAX_MODIFIER, REPUTATION_WTP_MAX_MODIFIER)
+  return baseWtp * (1 + modifier)
+}
+
 export function calculateStandScore(
   input: {
     willingnessToPay: number
@@ -609,7 +625,7 @@ export function calculateStandScore(
   const recipeFit = calculateRecipeFit(input.recipe, weather, balance)
   const reputationPull = clamp(input.reputation / 100, 0, 1)
 
-  return Number((priced * 0.5 + recipeFit * 0.3 + reputationPull * 0.2).toFixed(4))
+  return Number((priced * 0.45 + recipeFit * 0.30 + reputationPull * 0.25).toFixed(4))
 }
 
 export function updatePlayerPlan(
@@ -734,7 +750,8 @@ function scoreCustomerOffers(
   return room.players
     .filter((player) => !excludedPlayerIds.has(player.id))
     .map((player) => {
-      const offerPriceScore = priceScore(player.dailyPlan.price, willingnessToPay)
+      const playerEffectiveWtp = _effectiveWtp(willingnessToPay, player.reputation)
+      const offerPriceScore = priceScore(player.dailyPlan.price, playerEffectiveWtp)
       const preferredRecipeFit = calculatePreferredRecipeFit(player.dailyPlan.recipe, preferredRecipe)
       const repeatHistoryBonus = historyBonus(customer.standHistory[player.id], room.day)
       const totalScore =
@@ -742,9 +759,9 @@ function scoreCustomerOffers(
           ? 0
           : Number(
               (
-                offerPriceScore * 0.4 +
+                offerPriceScore * 0.35 +
                 preferredRecipeFit * 0.35 +
-                clamp(player.reputation / 100, 0, 1) * 0.1 +
+                clamp(player.reputation / 100, 0, 1) * 0.15 +
                 repeatHistoryBonus
               ).toFixed(4),
             )
@@ -845,10 +862,7 @@ function finalizePlayers(room: RoomState, satisfactionTotals: Map<string, number
               (satisfactionTotals.get(player.id) ?? 0) / player.dailyResults.cupsSold
             ).toFixed(4),
           )
-    const reputationDelta =
-      player.dailyResults.cupsSold === 0
-        ? -1
-        : Math.round((satisfaction - 0.55) * Math.max(2, Math.round(player.dailyResults.cupsSold / 4)) * 2)
+    const reputationDelta = _calculateReputationDelta(satisfaction, player.dailyResults.cupsSold)
     const reputationAfter = clamp(player.reputation + reputationDelta, balance.reputationMin, balance.reputationMax)
     const purchaseCost = calculatePurchaseCost(room.marketBasePrices ?? emptyInventory(), player.dailyPlan.purchases)
     const profit = roundMoney(player.dailyResults.revenue - purchaseCost)
