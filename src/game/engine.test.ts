@@ -10,6 +10,7 @@ import {
   calculateStandScore,
   _calculateReputationDelta,
   _effectiveWtp,
+  _applyReputationDecay,
   createRoom,
   customerCountForWeather,
   enterResultsPhase,
@@ -1405,6 +1406,11 @@ describe('persistent customer profiles', () => {
 
       let secondDay = beginNextDay(enterResultsPhase(firstDay), persistentBalance)
       secondDay = forcePlanningWeather(secondDay, 'raining')
+      // Equalize reputations to isolate history bonus from underdog bonus
+      secondDay = {
+        ...secondDay,
+        players: secondDay.players.map((p) => ({ ...p, reputation: 50 })),
+      }
       secondDay = updatePlayerPlan(secondDay, 'player-host', {
         purchases: { lemons: 3, sugar: 3, ice: 3 },
         recipe: { lemons: 3, sugar: 3, ice: 0 },
@@ -1701,5 +1707,94 @@ describe('customer taste diversity', () => {
     const preferredIce = rainyIdealIce + (2 * defaultBalanceConfig.customerTastePreferenceWeight)
     expect(preferredIce).toBeGreaterThan(0.5)
     expect(preferredIce).toBeLessThan(1.0)
+  })
+})
+
+describe('anti-snowball mechanics', () => {
+  describe('reputation decay toward baseline', () => {
+    it('decays reputation 70 toward 50', () => {
+      const decayed = _applyReputationDecay(70)
+      expect(decayed).toBeLessThan(70)
+      expect(decayed).toBeGreaterThanOrEqual(69)
+    })
+
+    it('recovers reputation 30 toward 50', () => {
+      const decayed = _applyReputationDecay(30)
+      expect(decayed).toBeGreaterThan(30)
+      expect(decayed).toBeLessThanOrEqual(31)
+    })
+
+    it('leaves reputation 50 unchanged', () => {
+      expect(_applyReputationDecay(50)).toBe(50)
+    })
+  })
+
+  describe('underdog discovery bonus in multiplayer', () => {
+    it('gives the lower-reputation player a selection advantage', () => {
+      const deterministicBalance = {
+        ...defaultBalanceConfig,
+        weatherProfiles: {
+          ...defaultBalanceConfig.weatherProfiles,
+          sunny: {
+            ...defaultBalanceConfig.weatherProfiles.sunny,
+            customerCount: 200,
+            baseWillingnessToPay: 3,
+            willingnessVariance: 0,
+          },
+        },
+      }
+      let underdogSales = 0
+      let favoriteSales = 0
+
+      for (let seed = 1; seed <= 100; seed += 1) {
+        let room: RoomState = createPlanningRoom(seed)
+        room = {
+          ...room,
+          weather: 'sunny',
+          marketBasePrices: { lemons: 0.3, sugar: 0.2, ice: 0.1 },
+          players: room.players.map((player, i) => ({
+            ...player,
+            reputation: i === 0 ? 40 : 60,
+            inventory: { lemons: 200, sugar: 200, ice: 200 },
+          })),
+        }
+        room = updatePlayerPlan(room, 'player-host', {
+          price: 2.3,
+          recipe: { lemons: 2, sugar: 2, ice: 2 },
+        })
+        room = updatePlayerPlan(room, 'player-guest', {
+          price: 2.3,
+          recipe: { lemons: 2, sugar: 2, ice: 2 },
+        })
+        room = setPlayerReady(setPlayerReady(room, 'player-host', true), 'player-guest', true)
+
+        const simulated = startSimulation(room, {}, deterministicBalance)
+        const host = simulated.players.find((p) => p.id === 'player-host')
+        const guest = simulated.players.find((p) => p.id === 'player-guest')
+
+        underdogSales += host?.dailyResults.cupsSold ?? 0
+        favoriteSales += guest?.dailyResults.cupsSold ?? 0
+      }
+
+      // Underdog (rep=40) should get a bonus that brings them closer to even
+      // despite the favorite (rep=60) having higher reputation weight
+      // The underdog bonus should partially offset the reputation disadvantage
+      expect(underdogSales).toBeGreaterThan(favoriteSales * 0.85)
+    })
+  })
+
+  describe('singleplayer is unaffected by underdog bonus', () => {
+    it('calculateStandScore does not include underdog bonus', () => {
+      const lowRep = calculateStandScore(
+        { willingnessToPay: 2, recipe: { lemons: 2, sugar: 2, ice: 2 }, price: 1.5, reputation: 30 },
+        'sunny',
+      )
+      const highRep = calculateStandScore(
+        { willingnessToPay: 2, recipe: { lemons: 2, sugar: 2, ice: 2 }, price: 1.5, reputation: 70 },
+        'sunny',
+      )
+      // Higher reputation should always score higher in singleplayer (no underdog bonus)
+      expect(highRep).toBeGreaterThan(lowRep)
+    })
   })
 })
