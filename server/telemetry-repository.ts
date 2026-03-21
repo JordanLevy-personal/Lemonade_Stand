@@ -17,6 +17,8 @@ interface SqliteTelemetryRepositoryOptions {
   now?: () => string
 }
 
+export const TELEMETRY_VERSION = '0.2'
+
 export interface GameTelemetryRecord {
   gameId: string
   roomId: string
@@ -136,6 +138,7 @@ export class SqliteTelemetryRepository implements TelemetryRepository {
         player_count integer not null,
         run_length_days integer not null,
         customer_taste_preference_weight real not null default 0.2,
+        telemetry_version text not null default '0.1',
         created_at text not null,
         last_activity_at text not null
       );
@@ -261,6 +264,7 @@ export class SqliteTelemetryRepository implements TelemetryRepository {
     )
     this.ensureColumn('customer_events', 'reroute_count', 'integer not null default 0')
     this.ensureColumn('customer_offer_scores', 'selection_round', 'integer not null default 1')
+    this.ensureColumn('games', 'telemetry_version', "text not null default '0.1'")
   }
 
   close(): void {
@@ -280,6 +284,7 @@ export class SqliteTelemetryRepository implements TelemetryRepository {
         player_count,
         run_length_days,
         customer_taste_preference_weight,
+        telemetry_version,
         created_at,
         last_activity_at
       ) values (
@@ -290,6 +295,7 @@ export class SqliteTelemetryRepository implements TelemetryRepository {
         :playerCount,
         :runLengthDays,
         :customerTastePreferenceWeight,
+        :telemetryVersion,
         :createdAt,
         :lastActivityAt
       )
@@ -300,6 +306,7 @@ export class SqliteTelemetryRepository implements TelemetryRepository {
         player_count = excluded.player_count,
         run_length_days = excluded.run_length_days,
         customer_taste_preference_weight = excluded.customer_taste_preference_weight,
+        telemetry_version = excluded.telemetry_version,
         last_activity_at = excluded.last_activity_at
     `).run({
       gameId: record.gameId,
@@ -309,6 +316,7 @@ export class SqliteTelemetryRepository implements TelemetryRepository {
       playerCount: record.playerCount,
       runLengthDays: record.runLengthDays,
       customerTastePreferenceWeight: record.customerTastePreferenceWeight,
+      telemetryVersion: TELEMETRY_VERSION,
       createdAt: timestamp,
       lastActivityAt: timestamp,
     })

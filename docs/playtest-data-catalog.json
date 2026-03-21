@@ -1,6 +1,6 @@
 {
-  "version": 1,
-  "updatedAt": "2026-03-19",
+  "version": 2,
+  "updatedAt": "2026-03-21",
   "purpose": "Canonical catalog of raw playtest telemetry logged for solo and multiplayer balancing and post-run analysis.",
   "reviewPolicy": {
     "requiredForFeatureTypes": [
@@ -70,6 +70,13 @@
           "source": "shared balance config at room creation",
           "implemented": true,
           "rationale": "Captures the exact global taste-weight multiplier used when converting persistent taste offsets into daily customer preference."
+        },
+        {
+          "name": "telemetryVersion",
+          "type": "string",
+          "source": "TELEMETRY_VERSION constant in telemetry-repository.ts",
+          "implemented": true,
+          "rationale": "Tags each game with the balance-tuning era it was played under. Pre-March-2026 tuning is v0.1, post-tuning is v0.2. Lets analysts filter or segment data by game version when comparing balance changes."
         },
         {
           "name": "createdAt",
