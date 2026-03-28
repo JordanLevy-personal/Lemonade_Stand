@@ -18,7 +18,7 @@ This matches the client connection behavior in [`src/client/socket.ts`](/Users/j
 ## Assumptions
 
 - Ubuntu 24.04 or similar on Hetzner
-- Your code lives at `/var/www/roguelike-lemonade-stand`
+- Your code lives at `/var/www/lemonade-stand`
 - Your domain is managed in Cloudflare
 - Node.js 22.12+ and npm 10+ are installed so `node` and `npm` are available under `/usr/bin`
 
@@ -48,8 +48,8 @@ If `node -v` reports anything below `v22.12.0`, stop and upgrade Node before try
 ```bash
 sudo mkdir -p /var/www
 sudo chown "$USER":"$USER" /var/www
-git clone <your-repo-url> /var/www/roguelike-lemonade-stand
-cd /var/www/roguelike-lemonade-stand
+git clone <your-repo-url> /var/www/lemonade-stand
+cd /var/www/lemonade-stand
 npm ci
 npm run build
 ```
@@ -68,24 +68,24 @@ After the lockfile is committed to the repo and pulled onto the server, switch b
 Copy the service template:
 
 ```bash
-sudo cp deploy/systemd/roguelike-lemonade-stand.service /etc/systemd/system/roguelike-lemonade-stand.service
+sudo cp deploy/systemd/lemonade-stand.service /etc/systemd/system/lemonade-stand.service
 ```
 
 Edit the file before enabling it:
 
-- Replace `User=deploy` and `Group=deploy` with the account that owns `/var/www/roguelike-lemonade-stand`
+- Replace `User=deploy` and `Group=deploy` with the account that owns `/var/www/lemonade-stand`
 - Replace the working directory if you deployed elsewhere
 
 ```bash
-sudo nano /etc/systemd/system/roguelike-lemonade-stand.service
+sudo nano /etc/systemd/system/lemonade-stand.service
 ```
 
 Start and enable the backend:
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable --now roguelike-lemonade-stand.service
-sudo systemctl status roguelike-lemonade-stand.service
+sudo systemctl enable --now lemonade-stand.service
+sudo systemctl status lemonade-stand.service
 ```
 
 Confirm the backend is listening locally:
@@ -99,22 +99,22 @@ curl http://127.0.0.1:3001/health
 Copy the site template:
 
 ```bash
-sudo cp deploy/nginx/roguelike-lemonade-stand.conf /etc/nginx/sites-available/roguelike-lemonade-stand.conf
+sudo cp deploy/nginx/lemonade-stand.conf /etc/nginx/sites-available/lemonade-stand.conf
 ```
 
 Edit these values before enabling it:
 
-- Replace `example.com` and `www.example.com`
-- Replace `/var/www/roguelike-lemonade-stand`
+- Replace `lemonade-stand.jordanlevy.xyz` if you deploy to a different hostname
+- Replace `/var/www/lemonade-stand`
 
 ```bash
-sudo nano /etc/nginx/sites-available/roguelike-lemonade-stand.conf
+sudo nano /etc/nginx/sites-available/lemonade-stand.conf
 ```
 
 Enable the site:
 
 ```bash
-sudo ln -s /etc/nginx/sites-available/roguelike-lemonade-stand.conf /etc/nginx/sites-enabled/roguelike-lemonade-stand.conf
+sudo ln -s /etc/nginx/sites-available/lemonade-stand.conf /etc/nginx/sites-enabled/lemonade-stand.conf
 sudo nginx -t
 sudo systemctl reload nginx
 ```
@@ -147,7 +147,7 @@ Recommended first pass:
 Once DNS resolves to the VPS:
 
 ```bash
-sudo certbot --nginx -d example.com -d www.example.com
+sudo certbot --nginx -d lemonade-stand.jordanlevy.xyz
 ```
 
 After Certbot updates Nginx, test and reload if needed:
@@ -164,15 +164,14 @@ In Cloudflare, set SSL/TLS encryption mode to `Full (strict)` after the origin c
 ### Basic checks
 
 ```bash
-curl -I https://example.com
-curl -I https://www.example.com
+curl -I https://lemonade-stand.jordanlevy.xyz
 ```
 
 In a browser:
 
-- Open `https://example.com`
+- Open `https://lemonade-stand.jordanlevy.xyz`
 - Confirm the page loads without mixed-content warnings
-- Open DevTools and confirm there is a successful `wss://example.com/ws` connection
+- Open DevTools and confirm there is a successful `wss://lemonade-stand.jordanlevy.xyz/ws` connection
 
 ### Manual multiplayer checks
 
@@ -190,11 +189,11 @@ In a browser:
 From the VPS:
 
 ```bash
-cd /var/www/roguelike-lemonade-stand
+cd /var/www/lemonade-stand
 git pull
 npm ci
 npm run build
-sudo systemctl restart roguelike-lemonade-stand.service
+sudo systemctl restart lemonade-stand.service
 sudo systemctl reload nginx
 ```
 
@@ -212,15 +211,15 @@ Add these repository secrets:
 
 Add these repository variables if you need to override the defaults:
 
-- `VPS_DEPLOY_PATH`: defaults to `/var/www/roguelike-lemonade-stand`
-- `VPS_SYSTEMD_SERVICE`: defaults to `roguelike-lemonade-stand.service`
+- `VPS_DEPLOY_PATH`: defaults to `/var/www/lemonade-stand`
+- `VPS_SYSTEMD_SERVICE`: defaults to `lemonade-stand.service`
 - `VPS_SSH_PORT`: defaults to `22`
 
 ### VPS prerequisites for GitHub deploys
 
 - The VPS user must already be able to SSH in with the configured key.
-- That user must be able to run `sudo systemctl restart roguelike-lemonade-stand.service` and `sudo systemctl reload nginx`.
-- The repo checkout at `/var/www/roguelike-lemonade-stand` must already exist on the VPS.
+- That user must be able to run `sudo systemctl restart lemonade-stand.service` and `sudo systemctl reload nginx`.
+- The repo checkout at `/var/www/lemonade-stand` must already exist on the VPS.
 - The checkout must be able to `git pull origin main` non-interactively.
 
 If the repo is private, configure deploy credentials on the VPS before relying on the GitHub Action.
@@ -230,13 +229,13 @@ If the repo is private, configure deploy credentials on the VPS before relying o
 On deploy, the workflow SSHes into the VPS and runs:
 
 ```bash
-cd /var/www/roguelike-lemonade-stand
+cd /var/www/lemonade-stand
 git fetch --prune origin
 git checkout main
 git pull --ff-only origin main
 npm ci
 npm run build
-sudo systemctl restart roguelike-lemonade-stand.service
+sudo systemctl restart lemonade-stand.service
 sudo systemctl reload nginx
 curl --fail http://127.0.0.1:3001/health
 ```
@@ -248,7 +247,7 @@ The health check is the last step so the workflow fails if the backend does not 
 Backend logs:
 
 ```bash
-sudo journalctl -u roguelike-lemonade-stand.service -n 200 --no-pager
+sudo journalctl -u lemonade-stand.service -n 200 --no-pager
 ```
 
 Nginx config test:

@@ -6,7 +6,7 @@ readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly REPO_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 
 DEPLOY_BRANCH="${DEPLOY_BRANCH:-main}"
-SYSTEMD_SERVICE="${SYSTEMD_SERVICE:-roguelike-lemonade-stand.service}"
+SYSTEMD_SERVICE="${SYSTEMD_SERVICE:-lemonade-stand.service}"
 HEALTHCHECK_URL="${HEALTHCHECK_URL:-http://127.0.0.1:3001/health}"
 HEALTHCHECK_ATTEMPTS="${HEALTHCHECK_ATTEMPTS:-20}"
 HEALTHCHECK_DELAY_SECONDS="${HEALTHCHECK_DELAY_SECONDS:-2}"

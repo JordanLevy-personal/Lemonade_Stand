@@ -1,4 +1,4 @@
-# Roguelike Lemonade Stand Style Guide
+# Lemonade Stand Style Guide
 
 This document defines the core aesthetic principles and UI architecture for the project. When modifying the user interface or generating new visual assets, adhere to these guidelines.
 
